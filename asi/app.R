@@ -1,8 +1,8 @@
 # app.R
 # This Shiny app is designed for batch analysis of soil aggregate stability by image quantification,
 # integrating the Soil Health Institute's original R code.
-# The app pairs initial and final images based on their filenames and provides
-# a table and a bar graph of stability indices.
+# The app pairs initial and final images based on their file-names and provides
+# a table and a bar graph of stability indices. - Filenaming in the app is very crucial
 
 library(shiny)
 library(dplyr)

@@ -1,0 +1,12 @@
+name: ReSQ-app
+title: ReSQ-app
+username: ljdvillasica
+account: ljdvillasica
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 14876743
+bundleId: 10393909
+url: https://ljdvillasica.shinyapps.io/ReSQ-app/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

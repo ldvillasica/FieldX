@@ -4,12 +4,106 @@
 library(shiny)
 library(shinydashboard)
 library(readr)     # For flexible CSV reading (read_delim)
-library(dplyr)     # For data manipulation
+library(dplyr)     # For data manipulation (explicitly called for select)
 library(sf)        # For spatial vector data (modern R spatial)
 library(leaflet)   # For interactive maps
 library(DT)        # For interactive data tables
 library(htmltools) # For creating richer HTML for popups
 library(htmlwidgets) # To save the map as HTML
+library(shinyjs)   # For showing/hiding UI elements
+library(tibble)    # For rownames_to_column (if not automatically loaded by dplyr/tidyverse)
+library(leaflet.extras) # NEW: For adding extra Leaflet components like minimap
+
+# --- Helper Function for Popup Content (Reusable for app and download) ---
+generate_popup_html <- function(data_row) {
+    # Ensure data_row is a data frame, not an sf object if it was passed directly
+    row_data_raw <- if (inherits(data_row, "sf")) st_drop_geometry(data_row) else data_row
+    
+    image_html <- ""
+    data_for_table <- row_data_raw
+    
+    # --- Image Handling ---
+    # Adding subtle border and radius for images
+    if ("photo_url" %in% names(row_data_raw) && !is.na(row_data_raw[["photo_url"]]) && nzchar(as.character(row_data_raw[["photo_url"]]))) {
+        image_url <- as.character(row_data_raw[["photo_url"]])
+        image_html <- paste0("<img src='", image_url, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto; border: 1px solid #ddd; border-radius: 4px;'><br>")
+        data_for_table <- data_for_table %>% dplyr::select(-photo_url) # Remove from table if handled by image
+    } 
+    # Handle photo_path (local image file, relative to www folder)
+    else if ("photo_path" %in% names(data_for_table) && !is.na(data_for_table[["photo_path"]]) && nzchar(as.character(data_for_table[["photo_path"]]))) {
+        local_path <- as.character(data_for_table[["photo_path"]])
+        image_html <- paste0("<img src='", local_path, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto; border: 1px solid #ddd; border-radius: 4px;'><br>")
+        data_for_table <- data_for_table %>% dplyr::select(-photo_path) # Remove from table if handled by image
+    }
+    
+    # --- Popup Title ---
+    # Try to find a good title for the popup: prioritize common ID/Name/Location columns
+    popup_title_content <- "Point Details"
+    title_found <- FALSE
+    
+    if (!title_found && "name" %in% names(row_data_raw) && !is.na(row_data_raw[["name"]]) && nzchar(as.character(row_data_raw[["name"]]))) {
+        popup_title_content <- as.character(row_data_raw[["name"]])
+        data_for_table <- data_for_table %>% dplyr::select(-name)
+        title_found <- TRUE
+    } else if (!title_found && "id" %in% names(row_data_raw) && !is.na(row_data_raw[["id"]]) && nzchar(as.character(row_data_raw[["id"]]))) {
+        popup_title_content <- paste0("ID: ", as.character(row_data_raw[["id"]]))
+        data_for_table <- data_for_table %>% dplyr::select(-id)
+        title_found <- TRUE
+    } else if (!title_found && "barangay" %in% names(row_data_raw) && !is.na(row_data_raw[["barangay"]]) && nzchar(as.character(row_data_raw[["barangay"]]))) {
+        popup_title_content <- as.character(row_data_raw[["barangay"]])
+        data_for_table <- data_for_table %>% dplyr::select(-barangay)
+        title_found <- TRUE
+    } else if (!title_found && ncol(row_data_raw) > 0 && !is.numeric(row_data_raw[[1]])) {
+        # Fallback: Use the first non-numeric column if no specific title column found
+        first_col_name <- names(row_data_raw)[1]
+        if (first_col_name %in% names(data_for_table) && !is.na(row_data_raw[[first_col_name]]) && nzchar(as.character(row_data_raw[[first_col_name]]))) {
+            popup_title_content <- as.character(row_data_raw[[first_col_name]])
+            data_for_table <- data_for_table %>% dplyr::select(-!!sym(first_col_name))
+            title_found <- TRUE
+        }
+    }
+    
+    # Escape HTML for the title to prevent XSS (if title comes from user data)
+    popup_title_html <- htmlEscape(popup_title_content)
+    
+    # Ensure internal .row_id, coordinates, and other non-display columns are not shown in table
+    data_for_table <- data_for_table %>%
+        dplyr::select_if(~!any(grepl(".row_id|lon|lat|x_coord|y_coord|easting|northing|geom", ., ignore.case = TRUE)))
+    
+    # --- Table Content ---
+    table_rows_html <- lapply(names(data_for_table), function(col_name) {
+        value <- as.character(data_for_table[[col_name]])
+        # Display "N/A" for NA or empty string values
+        display_value <- if (is.na(value) || value == "") "N/A" else htmlEscape(value) # Escape values too
+        
+        paste0(
+            "<tr style='border-bottom: 1px solid #eee;'>", # Subtle row separator
+            "<td style='padding: 4px 8px; font-weight: bold; vertical-align: top; white-space: nowrap;'>", gsub("_", " ", col_name), ":</td>",
+            "<td style='padding: 4px 8px; vertical-align: top;'>", display_value, "</td>",
+            "</tr>"
+        )
+    })
+    
+    table_html <- paste0(
+        "<table style='width:100%; border-collapse: collapse; font-size: 13px;'>", # Basic table styling
+        "<tbody>",
+        paste(table_rows_html, collapse = ""),
+        "</tbody>",
+        "</table>"
+    )
+    
+    # --- Combine all parts into a wrapper div ---
+    htmltools::HTML(paste0(
+        "<div style='max-width:250px; overflow-wrap: break-word; text-align: center; padding: 5px; font-family: Arial, sans-serif;'>", # Wrapper for padding, max-width, and font
+        "<h4 style='margin-top:0; margin-bottom: 10px; color: #333; font-size: 16px; border-bottom: 1px solid #ddd; padding-bottom: 5px;'>", popup_title_html, "</h4>",
+        image_html,
+        "<div style='text-align: left; margin-top: 10px; padding: 0 5px;'>", # Align table text left, add padding
+        table_html,
+        "</div>",
+        "</div>"
+    ))
+}
+
 
 # --- UI (User Interface) ---
 ui <- dashboardPage(
@@ -22,6 +116,7 @@ ui <- dashboardPage(
         )
     ),
     dashboardBody(
+        useShinyjs(), # Initialize shinyjs (still useful for other dynamic elements if needed)
         tabItems(
             # Tab 1: Data Upload
             tabItem(tabName = "upload_data",
@@ -78,7 +173,7 @@ ui <- dashboardPage(
                             uiOutput("color_var_select"),
                             checkboxInput("show_data_table", "Show Raw Data Table", TRUE),
                             actionButton("update_map_btn", "Update Map"),
-                            downloadButton("download_map", "Download Map as HTML") # ADDED DOWNLOAD BUTTON
+                            downloadButton("download_map", "Download Map as HTML")
                         ),
                         box(
                             title = "Interactive Map", status = "info", solidHeader = TRUE,
@@ -86,12 +181,13 @@ ui <- dashboardPage(
                             leafletOutput("map_viewer", height = "600px")
                         )
                     ),
+                    # Raw Data Table will now be in its own fluidRow, taking full width if no sidebar
                     fluidRow(
                         conditionalPanel(
-                            condition = "input.show_data_table",
+                            condition = "input.show_data_table", # Show/hide based on checkbox
                             box(
                                 title = "Raw Data Table", status = "success", solidHeader = TRUE,
-                                width = 12,
+                                width = 12, # Now takes full width of the row
                                 DTOutput("raw_data_table")
                             )
                         )
@@ -103,6 +199,9 @@ ui <- dashboardPage(
 
 # --- Server Logic ---
 server <- function(input, output, session) {
+    
+    # No more sidebar initialization needed, as we're using popups
+    # shinyjs::hide("data_sidebar_box") is removed.
     
     # Reactive expression to read uploaded data
     raw_data <- reactive({
@@ -145,7 +244,7 @@ server <- function(input, output, session) {
     # Dynamic UI for variable to color by
     output$color_var_select <- renderUI({
         df <- raw_data()
-        req(df) # Modified: Only require 'df' to be available for this UI.
+        req(df) # Only require 'df' to be available for this UI.
         
         numeric_cols <- names(df)[sapply(df, is.numeric)]
         
@@ -186,7 +285,7 @@ server <- function(input, output, session) {
     spatial_points_sf <- eventReactive(input$update_map_btn, {
         req(input$x_coord_col, input$y_coord_col, raw_data())
         
-        df <- raw_data()
+        df <- raw_data() # No need for .row_id as we're not using sidebar clicks
         
         # Determine input CRS from user selection
         input_crs_code <- if (input$input_crs_epsg == "") {
@@ -256,7 +355,6 @@ server <- function(input, output, session) {
         coords <- st_coordinates(sf_obj)
         
         # Ensure coordinates are in WGS84 (Lat/Lon) before calculating mean
-        # spatial_points_sf() already ensures this, but good to be explicit
         mean_lon <- mean(coords[, 1], na.rm = TRUE)
         mean_lat <- mean(coords[, 2], na.rm = TRUE)
         
@@ -269,66 +367,26 @@ server <- function(input, output, session) {
     })
     
     # Reactive: Generate the Leaflet map object (used for both display and download)
-    # This reactive ensures the map logic is run only once for both outputs.
     final_map_object <- reactive({
         req(spatial_points_sf())
         sf_data <- spatial_points_sf()
         map_center <- center_map_coords()
         
-        # Create popups for each point with image and data table
-        popups_html <- lapply(seq_len(nrow(sf_data)), function(i) {
-            row_data_raw <- st_drop_geometry(sf_data[i, ]) # Get row data excluding geometry
-            
-            image_html <- ""
-            data_for_table <- row_data_raw # Data that will go into the table
-            
-            # Check for 'photo_url' column
-            if ("photo_url" %in% names(row_data_raw) && 
-                !is.na(row_data_raw[["photo_url"]]) && 
-                nzchar(as.character(row_data_raw[["photo_url"]]))) {
-                
-                image_url <- as.character(row_data_raw[["photo_url"]])
-                # Add styling for centering, max width, and bottom margin
-                image_html <- paste0("<img src='", image_url, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto;'><br>")
-                data_for_table <- data_for_table %>% select(-photo_url) # Remove URL from table data
-            } 
-            # Check for 'photo_path' (for local images, if applicable)
-            else if ("photo_path" %in% names(row_data_raw) && 
-                     !is.na(row_data_raw[["photo_path"]]) && 
-                     nzchar(as.character(row_data_raw[["photo_path"]]))) {
-                
-                local_path <- as.character(row_data_raw[["photo_path"]])
-                image_html <- paste0("<img src='", local_path, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto;'><br>")
-                data_for_table <- data_for_table %>% select(-photo_path) # Remove path from table data
-            }
-            
-            # Build the HTML table string for all remaining attributes
-            table_rows_html <- lapply(names(data_for_table), function(col_name) {
-                value <- as.character(data_for_table[[col_name]])
-                paste0("<tr><td><b>", col_name, ":</b></td><td>", value, "</td></tr>")
-            })
-            table_html <- paste0(
-                "<table class='table table-sm table-condensed table-borderless'>", # Bootstrap classes for styling
-                "<tbody>",
-                paste(table_rows_html, collapse = ""),
-                "</tbody>",
-                "</table>"
-            )
-            
-            # Combine image HTML (if any) with attribute table HTML
-            htmltools::HTML(paste0(image_html, table_html))
-        })
-        
         # Determine coloring scheme for map display
         color_by_var <- input$color_var # This input is part of the Shiny app's interactivity
         pal <- NULL
-        colors <- "blue" # Default color for markers
+        colors <- "blue" # Default color for markers if no variable or not numeric
         
         if (color_by_var != "" && color_by_var %in% names(sf_data) && is.numeric(sf_data[[color_by_var]])) {
             pal <- colorNumeric("viridis", domain = sf_data[[color_by_var]], na.color = "transparent")
             colors <- pal(sf_data[[color_by_var]])
             colors[is.na(colors)] <- "#808080" # Grey for NA values
         } 
+        
+        # Generate popups for the live app display
+        popups_html_live_app <- lapply(seq_len(nrow(sf_data)), function(i) {
+            generate_popup_html(sf_data[i, ]) # Use the helper function
+        })
         
         m <- leaflet() %>%
             addProviderTiles(providers$OpenStreetMap, group = "OpenStreetMap") %>%
@@ -337,6 +395,13 @@ server <- function(input, output, session) {
             addLayersControl(
                 baseGroups = c("OpenStreetMap", "Satellite"),
                 options = layersControlOptions(collapsed = FALSE)
+            ) %>%
+            # NEW: Add Mini-map
+            addMiniMap(
+                tiles = providers$Esri.WorldStreetMap, # Use a simpler tile for the minimap
+                toggleDisplay = TRUE, # Allows toggling the minimap visibility
+                minimized = FALSE, # Start expanded
+                position = "bottomright" # Position of the minimap
             )
         
         # Set initial view
@@ -348,7 +413,7 @@ server <- function(input, output, session) {
             warning("Using default map center due to invalid calculated coordinates.")
         }
         
-        # Add markers
+        # Add markers with popups for the live app
         m <- m %>%
             addCircleMarkers(
                 data = sf_data,
@@ -356,7 +421,7 @@ server <- function(input, output, session) {
                 color = colors, # Use dynamic colors for display in the app
                 stroke = TRUE,
                 fillOpacity = 0.8,
-                popup = popups_html,
+                popup = popups_html_live_app, # Add popups to live app
                 group = "Data Points"
             )
         
@@ -379,45 +444,33 @@ server <- function(input, output, session) {
             paste0("caraga_interactive_map_", Sys.Date(), ".html")
         },
         content = function(file) {
-            # For the downloaded HTML, we'll force the color to blue and not include a dynamic legend,
-            # as the downloaded map is static.
-            # If you want the downloaded map to retain the *currently selected* color variable,
-            # you would need to regenerate the map object specifically for download
-            # or adjust the final_map_object() to take an argument for static vs. dynamic coloring.
-            # For simplicity, I'm setting it to blue for the download.
+            # This map will be downloaded as a self-contained HTML file.
+            # IMPORTANT CLARIFICATIONS ABOUT "SELF-CONTAINED":
+            # 1. Your data (points, their attributes) are embedded directly into the HTML.
+            # 2. R-generated JavaScript and CSS for Leaflet/htmlwidgets are embedded.
+            # 3. EXTERNAL RESOURCES ARE *NOT* EMBEDDED:
+            #    - Basemap tiles (OpenStreetMap, Esri WorldImagery) are fetched from external servers.
+            #    - Images referenced by 'photo_url' (e.g., Google Drive links) are also fetched externally.
+            #      For true offline image display, images must be in a 'www' folder within your Shiny app
+            #      and referenced by 'photo_path' in your CSV, so they are included in the bundle.
             
-            # Recreate the map object specifically for download to ensure consistent static export.
-            # This is a bit redundant but ensures the download isn't affected by UI selection.
             sf_data_download <- spatial_points_sf()
             map_center_download <- center_map_coords()
             
+            # Reuse the coloring logic from the main map display for the downloaded map
+            color_by_var_download <- input$color_var # This will capture the variable selected in the app
+            pal_download <- NULL
+            colors_download <- "blue" # Default if no variable selected or not numeric
+            
+            if (color_by_var_download != "" && color_by_var_download %in% names(sf_data_download) && is.numeric(sf_data_download[[color_by_var_download]])) {
+                pal_download <- colorNumeric("viridis", domain = sf_data_download[[color_by_var_download]], na.color = "transparent")
+                colors_download <- pal_download(sf_data_download[[color_by_var_download]])
+                colors_download[is.na(colors_download)] <- "#808080" # Grey for NA values
+            }
+            
+            # Generate popups for the downloaded HTML map
             popups_html_download <- lapply(seq_len(nrow(sf_data_download)), function(i) {
-                row_data_raw <- st_drop_geometry(sf_data_download[i, ])
-                image_html <- ""
-                data_for_table <- row_data_raw
-                
-                if ("photo_url" %in% names(row_data_raw) && !is.na(row_data_raw[["photo_url"]]) && nzchar(as.character(row_data_raw[["photo_url"]]))) {
-                    image_url <- as.character(row_data_raw[["photo_url"]])
-                    image_html <- paste0("<img src='", image_url, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto;'><br>")
-                    data_for_table <- data_for_table %>% select(-photo_url)
-                } else if ("photo_path" %in% names(row_data_raw) && !is.na(row_data_raw[["photo_path"]]) && nzchar(as.character(row_data_raw[["photo_path"]]))) {
-                    local_path <- as.character(row_data_raw[["photo_path"]])
-                    image_html <- paste0("<img src='", local_path, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto;'><br>")
-                    data_for_table <- data_for_table %>% select(-photo_path)
-                }
-                
-                table_rows_html <- lapply(names(data_for_table), function(col_name) {
-                    value <- as.character(data_for_table[[col_name]])
-                    paste0("<tr><td><b>", col_name, ":</b></td><td>", value, "</td></tr>")
-                })
-                table_html <- paste0(
-                    "<table class='table table-sm table-condensed table-borderless'>",
-                    "<tbody>",
-                    paste(table_rows_html, collapse = ""),
-                    "</tbody>",
-                    "</table>"
-                )
-                htmltools::HTML(paste0(image_html, table_html))
+                generate_popup_html(sf_data_download[i, ]) # Use the helper function
             })
             
             m_download <- leaflet() %>%
@@ -427,6 +480,13 @@ server <- function(input, output, session) {
                 addLayersControl(
                     baseGroups = c("OpenStreetMap", "Satellite"),
                     options = layersControlOptions(collapsed = FALSE)
+                ) %>%
+                # NEW: Add Mini-map to downloaded map as well
+                addMiniMap(
+                    tiles = providers$Esri.WorldStreetMap, # Use a simpler tile for the minimap
+                    toggleDisplay = TRUE, # Allows toggling the minimap visibility
+                    minimized = FALSE, # Start expanded
+                    position = "bottomright" # Position of the minimap
                 )
             
             if (!is.null(map_center_download)) {
@@ -435,16 +495,22 @@ server <- function(input, output, session) {
                 m_download <- m_download %>% setView(lng = 125.54, lat = 8.94, zoom = 9)
             }
             
+            # Add markers with popups for the downloaded map
             m_download <- m_download %>%
                 addCircleMarkers(
                     data = sf_data_download,
                     radius = 5,
-                    color = "blue", # Default color for downloaded static map
+                    color = colors_download, # Use the dynamic colors from the app's current state
                     stroke = TRUE,
                     fillOpacity = 0.8,
-                    popup = popups_html_download,
+                    popup = popups_html_download, # Add popups to downloaded map
                     group = "Data Points"
                 )
+            
+            # Add legend to the downloaded map if coloring by a variable
+            if (!is.null(pal_download)) {
+                m_download <- m_download %>% addLegend(pal = pal_download, values = sf_data_download[[color_by_var_download]], title = color_by_var_download, position = "bottomright")
+            }
             
             htmlwidgets::saveWidget(m_download, file, selfcontained = TRUE)
         }

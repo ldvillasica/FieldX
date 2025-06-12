@@ -2,11 +2,11 @@
 
 # Load necessary packages
 library(shiny)
-library(agricolae)      # For experimental designs
+library(agricolae)       # For experimental designs
 library(agricolaeplotr)  # For visualization of designs
-library(dplyr)          # For data manipulation
-library(ggplot2)        # For further customization
-library(stringr)        # For string manipulation
+library(dplyr)            # For data manipulation
+library(ggplot2)          # For further customization
+library(stringr)          # For string manipulation
 
 # Define the User Interface (UI)
 ui <- fluidPage(
@@ -73,7 +73,7 @@ ui <- fluidPage(
 server <- function(input, output, session) {
     
     # Reactive value to store the generated design output (including $book)
-    rv <- reactiveValues(design_output = NULL, logbook = NULL, anova_df = NULL)
+    rv <- reactiveValues(design_output = NULL, logbook = NULL, anova_df = NULL, plot_coords = NULL) # Added plot_coords
     
     # 1. Generate Field Layout
     observeEvent(input$generateLayoutBtn, {
@@ -128,6 +128,26 @@ server <- function(input, output, session) {
                     `Degrees of Freedom (df)` = c(df_trt, df_error, df_total)
                 )
                 
+                # --- Calculate Row and Column Coordinates for CRD ---
+                plot_ncols <- input$crd_ncols
+                plot_nrows <- input$crd_nrows
+                
+                if (plot_nrows == 0) {
+                    plot_nrows <- ceiling(total_plots / plot_ncols)
+                }
+                
+                # Generate a sequence for columns and repeat for rows
+                col_seq <- rep(1:plot_ncols, length.out = total_plots)
+                row_seq <- ceiling((1:total_plots) / plot_ncols)
+                
+                crd_coords <- tibble(
+                    plots = 1:total_plots, # Assuming 'plots' column in logbook goes from 1 to total_plots
+                    row_coord = row_seq,
+                    col_coord = col_seq
+                )
+                rv$plot_coords <- crd_coords
+                # --- End CRD Coordinates ---
+                
             } else if (design_type_local == "Randomized Complete Block Design") {
                 req(input$numTreatments)
                 trt_names <- paste0("T", 1:input$numTreatments)
@@ -162,6 +182,20 @@ server <- function(input, output, session) {
                     `Degrees of Freedom (df)` = c(df_block, df_trt, df_error, df_total)
                 )
                 
+                # --- Calculate Row and Column Coordinates for RCBD ---
+                # For RCBD, a common layout is blocks as rows or columns.
+                # Let's assume blocks are arranged vertically (rows) and plots within blocks horizontally (columns).
+                rcbd_coords <- logbook_df_raw %>%
+                    arrange(block, plots) %>% # Ensure consistent ordering
+                    group_by(block) %>%
+                    mutate(col_coord = row_number()) %>% # Plot_Position_In_Block is already this
+                    ungroup() %>%
+                    mutate(row_coord = as.integer(as.factor(block))) %>% # Each block is a row
+                    select(plots, row_coord, col_coord)
+                
+                rv$plot_coords <- rcbd_coords
+                # --- End RCBD Coordinates ---
+                
             } else if (design_type_local == "Split-Plot Design") {
                 req(input$wpLevels, input$spLevels)
                 wp_factors <- paste0("A", 1:input$wpLevels)
@@ -170,7 +204,7 @@ server <- function(input, output, session) {
                     trt1 = wp_factors,
                     trt2 = sp_factors,
                     r = input$numReplications, # r is blocks in split-plot
-                    design = "rcbd" # Removed fixed seed here
+                    design = "rcbd"
                 )
                 logbook_df_raw <- design_output_agricolae$book
                 
@@ -189,15 +223,15 @@ server <- function(input, output, session) {
                 # Calculate DF for Split-Plot (RCBD for whole plots) - CORRECTED
                 r <- input$numReplications # Blocks
                 A <- input$wpLevels        # Whole plot levels
-                B <- input$spLevels        # Subplot levels
-                total_plots <- r * A * B
+                B_sp <- input$spLevels     # Subplot levels (renamed to avoid conflict with `agricolae`'s `B`)
+                total_plots <- r * A * B_sp
                 
                 df_block <- r - 1
                 df_A <- A - 1
-                df_error_a <- (r - 1) * (A - 1) # CORRECTED FORMULA FOR ERROR(A)
-                df_B <- B - 1
-                df_AB <- (A - 1) * (B - 1)
-                df_error_b <- A * (r - 1) * (B - 1)
+                df_error_a <- (r - 1) * (A - 1)
+                df_B <- B_sp - 1
+                df_AB <- (A - 1) * (B_sp - 1)
+                df_error_b <- A * (r - 1) * (B_sp - 1)
                 df_total <- total_plots - 1
                 
                 rv$anova_df <- tibble(
@@ -207,6 +241,30 @@ server <- function(input, output, session) {
                                                   df_B, df_AB, df_error_b, df_total)
                 )
                 
+                # --- Calculate Row and Column Coordinates for Split-Plot ---
+                # Ensure `plots`, `splots`, and `block` are numeric/integer for calculations.
+                # agricolae's `book` usually has `plots` and `splots` as integers,
+                # but `block` might be a factor. Let's make sure they are integers for consistency.
+                split_plot_coords <- logbook_df_raw %>%
+                    mutate(
+                        block_int = as.integer(as.character(block)), # Convert block to integer
+                        plots_int = as.integer(plots),              # Ensure plots is integer
+                        splots_int = as.integer(splots)             # Ensure splots is integer
+                    ) %>%
+                    arrange(block_int, plots_int, splots_int) %>%
+                    group_by(block_int) %>%
+                    mutate(
+                        row_coord = block_int,
+                        # Col coordinate will be based on position of whole plot and subplot within the block
+                        # Each whole plot occupies B_sp columns
+                        col_coord = (plots_int - 1) * B_sp + splots_int
+                    ) %>%
+                    ungroup() %>%
+                    # Select relevant columns for rv$plot_coords
+                    select(plots = plots_int, splots = splots_int, block = block_int, row_coord, col_coord)
+                
+                rv$plot_coords <- split_plot_coords
+                # --- End Split-Plot Coordinates ---
             }
             
             req(logbook_df_raw) # Ensure data exists before processing
@@ -243,14 +301,31 @@ server <- function(input, output, session) {
             }
             
             # Create the standardized dataframe for table and download
-            standardized_df <- tibble(
-                Plot = as.integer(standard_plot),
-                Block = as.factor(standard_block),
-                Treatment = as.factor(standard_treatment),
-                WholePlotFactor = as.factor(standard_wp_factor),
-                SubplotFactor = as.factor(standard_sp_factor)
-            ) %>%
-                select_if(~!all(is.na(.))) # Remove any columns that are entirely NA if they are not relevant
+            standardized_df <- NULL # Initialize to NULL for clarity
+            if (design_type_local == "Split-Plot Design") {
+                # Ensure `plots`, `splots`, and `block` are consistent types for joining
+                standardized_df <- tibble(
+                    Plot = as.integer(logbook_df_raw$plots), # Whole Plot Number
+                    Subplot = as.integer(logbook_df_raw$splots), # Subplot Number
+                    Block = as.integer(as.character(logbook_df_raw$block)), # Convert block to integer
+                    Treatment = as.factor(standard_treatment),
+                    WholePlotFactor = as.factor(standard_wp_factor),
+                    SubplotFactor = as.factor(standard_sp_factor)
+                ) %>%
+                    select_if(~!all(is.na(.))) %>%
+                    # Join using the numeric versions of plots, splots, and block
+                    left_join(rv$plot_coords, by = c("Plot" = "plots", "Subplot" = "splots", "Block" = "block"))
+            } else {
+                standardized_df <- tibble(
+                    Plot = as.integer(standard_plot),
+                    Block = as.factor(standard_block),
+                    Treatment = as.factor(standard_treatment),
+                    WholePlotFactor = as.factor(standard_wp_factor),
+                    SubplotFactor = as.factor(standard_sp_factor)
+                ) %>%
+                    select_if(~!all(is.na(.))) %>%
+                    left_join(rv$plot_coords, by = c("Plot" = "plots"))
+            }
             
             rv$logbook <- standardized_df
             rv$design_output <- design_output_agricolae
@@ -264,6 +339,7 @@ server <- function(input, output, session) {
             rv$logbook <- NULL
             rv$design_output <- NULL
             rv$anova_df <- NULL # Clear ANOVA table on error
+            rv$plot_coords <- NULL # Clear plot coordinates on error
             output$layoutTable <- renderTable(NULL)
             output$generatedLayoutPlot <- renderPlot(NULL)
             output$anovaTable <- renderTable(NULL)

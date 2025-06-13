@@ -118,7 +118,7 @@ classify_soil_texture <- function(Sand, Silt, Clay) {
 
 # --- Shiny UI (User Interface) ---
 ui <- fluidPage(
-    titlePanel("USDA Soil Texture Classifier and Plotter"),
+    titlePanel("Soil Texture Classifier and Plotter"),
     
     sidebarLayout(
         sidebarPanel(

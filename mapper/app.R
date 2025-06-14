@@ -78,8 +78,8 @@ generate_popup_html <- function(data_row) {
         
         paste0(
             "<tr style='border-bottom: 1px solid #eee;'>", # Subtle row separator
-            "<td style='padding: 4px 8px; font-weight: bold; vertical-align: top; white-space: nowrap;'>", gsub("_", " ", col_name), ":</td>",
-            "<td style='padding: 4px 8px; vertical-align: top;'>", display_value, "</td>",
+            "<td style='padding: 4px 8px; font-weight: bold; vertical-align: top;'>", gsub("_", " ", col_name), ":</td>",
+            "<td style='padding: 4px 8px; vertical-align: top;'>", display_value, "</td>", # Data values should wrap by default
             "</tr>"
         )
     })
@@ -94,7 +94,8 @@ generate_popup_html <- function(data_row) {
     
     # --- Combine all parts into a wrapper div ---
     htmltools::HTML(paste0(
-        "<div style='max-width:250px; overflow-wrap: break-word; text-align: center; padding: 5px; font-family: Arial, sans-serif;'>", # Wrapper for padding, max-width, and font
+        # Updated max-width and max-height for larger pop-up
+        "<div style='max-width:450px; max-height:400px; overflow-y: auto; overflow-wrap: break-word; text-align: center; padding: 5px; font-family: Arial, sans-serif;'>", 
         "<h4 style='margin-top:0; margin-bottom: 10px; color: #333; font-size: 16px; border-bottom: 1px solid #ddd; padding-bottom: 5px;'>", popup_title_html, "</h4>",
         image_html,
         "<div style='text-align: left; margin-top: 10px; padding: 0 5px;'>", # Align table text left, add padding
@@ -107,7 +108,7 @@ generate_popup_html <- function(data_row) {
 
 # --- UI (User Interface) ---
 ui <- dashboardPage(
-    dashboardHeader(title = "Point Data Plotter"),
+    dashboardHeader(title = "Regional Point Data Explorer"),
     dashboardSidebar(
         sidebarMenu(
             id = "sidebarMenu", # Add ID for updating tabs
@@ -123,7 +124,7 @@ ui <- dashboardPage(
         tabItems(
             # Tab 1: Data Upload
             tabItem(tabName = "upload_data",
-                    h2("Upload Your Point Data"),
+                    h2("Upload Your Regional Point Data"),
                     fluidRow(
                         box(
                             title = "Data Input", status = "primary", solidHeader = TRUE,

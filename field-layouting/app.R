@@ -2,11 +2,11 @@
 
 # Load necessary packages
 library(shiny)
-library(agricolae)       # For experimental designs
-library(agricolaeplotr)  # For visualization of designs
-library(dplyr)            # For data manipulation
-library(ggplot2)          # For further customization
-library(stringr)          # For string manipulation
+library(agricolae)         # For experimental designs
+library(agricolaeplotr)    # For visualization of designs
+library(dplyr)             # For data manipulation
+library(ggplot2)           # For further customization
+library(stringr)           # For string manipulation
 
 # Define the User Interface (UI)
 ui <- fluidPage(
@@ -20,30 +20,36 @@ ui <- fluidPage(
                                     "Randomized Complete Block Design",
                                     "Split-Plot Design")),
             
-            # Inputs for CRD and RCBD
+            # Inputs for CRD and RCBD (Treatments and Replications)
             conditionalPanel(
                 condition = "input.designType == 'Completely Randomized Design' || input.designType == 'Randomized Complete Block Design'",
-                numericInput("numTreatments", "Number of Treatments (Genotypes):", value = 10, min = 2)
+                numericInput("numTreatments", "Number of Treatments (Genotypes):", value = 10, min = 2),
+                textAreaInput("treatmentLabels", "Enter Treatment Labels (comma-separated, e.g., T1, T2, Variety A):", rows = 3,
+                              placeholder = "e.g., T1, T2, T3, Control, Treatment A"),
+                numericInput("numReplications", "Number of Replications:", value = 3, min = 1)
             ),
-            numericInput("numReplications", "Number of Replications:", value = 3, min = 1),
             
-            # Add input for plot arrangement for CRD (ncols and nrows)
+            # Add input for plot arrangement for CRD (ncols and nrows) - specific to CRD
             conditionalPanel(
                 condition = "input.designType == 'Completely Randomized Design'",
                 numericInput("crd_ncols", "Columns for CRD Plot:", value = 5, min = 1),
                 numericInput("crd_nrows", "Rows for CRD Plot:", value = 0, min = 0) # 0 means auto-calculate
             ),
             
-            # Specific inputs for Split-Plot
+            # Specific inputs for Split-Plot - specific to Split-Plot
             conditionalPanel(
                 condition = "input.designType == 'Split-Plot Design'",
                 numericInput("wpLevels", "Number of Whole Plot Levels (A):", value = 3, min = 2),
+                textAreaInput("wpLabels", "Enter Whole Plot Labels (comma-separated, e.g., Water Level 1, Water Level 2):", rows = 2,
+                              placeholder = "e.g., A1, A2, A3"),
                 numericInput("spLevels", "Number of Subplot Levels (B):", value = 4, min = 2),
+                textAreaInput("spLabels", "Enter Subplot Labels (comma-separated, e.g., Fertilizer 1, Fertilizer 2):", rows = 2,
+                              placeholder = "e.g., B1, B2, B3, B4")
             ),
             
             hr(), # Separator
             
-            # Optional Seed Input
+            # Optional Seed Input (applies to all designs)
             numericInput("randomSeed", "Optional: Set Random Seed (for reproducibility):", value = NULL, min = 1),
             helpText("Leave blank for a truly random layout each time."),
             
@@ -63,7 +69,7 @@ ui <- fluidPage(
                          plotOutput("generatedLayoutPlot", height = "600px")),
                 tabPanel("Dummy ANOVA Table",
                          h4("Expected Degrees of Freedom:"),
-                         tableOutput("anovaTable")) # New output for ANOVA table
+                         tableOutput("anovaTable"))
             )
         )
     )
@@ -73,7 +79,24 @@ ui <- fluidPage(
 server <- function(input, output, session) {
     
     # Reactive value to store the generated design output (including $book)
-    rv <- reactiveValues(design_output = NULL, logbook = NULL, anova_df = NULL, plot_coords = NULL) # Added plot_coords
+    rv <- reactiveValues(design_output = NULL, logbook = NULL, anova_df = NULL, plot_coords = NULL)
+    
+    # Helper function to find a column by its unique values (for treatments/factors)
+    # This is more robust as it doesn't rely on column names being 'trt', 'trt1', 'trt2'
+    find_factor_column <- function(df, expected_unique_values) {
+        # Ensure expected_unique_values are sorted for consistent comparison
+        expected_unique_values_sorted <- sort(unique(expected_unique_values))
+        
+        for (col_name in colnames(df)) {
+            current_col_values_sorted <- sort(unique(as.character(df[[col_name]])))
+            if (length(current_col_values_sorted) == length(expected_unique_values_sorted) &&
+                all(current_col_values_sorted == expected_unique_values_sorted)) {
+                return(col_name)
+            }
+        }
+        return(NULL) # Column not found
+    }
+    
     
     # 1. Generate Field Layout
     observeEvent(input$generateLayoutBtn, {
@@ -89,30 +112,50 @@ server <- function(input, output, session) {
             showNotification(paste("Using random seed:", input$randomSeed), type = "message", duration = 3)
         } else {
             # If no seed is provided, ensure a truly random generation
-            # By not setting a seed, R's default random number generator will use
-            # a different seed each time based on system time/state.
-            # It's good practice to ensure this by maybe setting to NULL or removing any prior set.seed
             rm(.Random.seed, envir = globalenv()) # Removes the current seed state
             showNotification("Generating truly random layout.", type = "message", duration = 3)
         }
         # --- End Handle Random Seed ---
         
-        
         tryCatch({
             if (design_type_local == "Completely Randomized Design") {
-                req(input$numTreatments)
-                trt_list_names <- paste0("T", 1:input$numTreatments)
+                req(input$numTreatments, input$treatmentLabels)
+                user_trt_labels <- unlist(str_split(input$treatmentLabels, ",")) %>% str_trim()
+                user_trt_labels <- user_trt_labels[user_trt_labels != ""] # Remove empty strings
+                
+                if (length(user_trt_labels) == 0) {
+                    stop("Please enter valid treatment labels.")
+                }
+                if (length(user_trt_labels) != input$numTreatments) {
+                    stop(paste0("Number of treatment labels (", length(user_trt_labels), ") does not match 'Number of Treatments' (", input$numTreatments, ")."))
+                }
+                
                 design_output_agricolae <- agricolae::design.crd(
-                    trt = trt_list_names,
-                    r = input$numReplications # Removed fixed seed here
+                    trt = user_trt_labels,
+                    r = input$numReplications
                 )
                 logbook_df_raw <- design_output_agricolae$book
-                design_output_agricolae$parameters$trt <- "trt_list_names"
+                
+                # FIND THE ACTUAL TREATMENT COLUMN NAME
+                actual_trt_col_name <- find_factor_column(logbook_df_raw, user_trt_labels)
+                
+                if (is.null(actual_trt_col_name)) {
+                    stop("Could not find the treatment column in CRD design output. Columns found: ",
+                         paste(colnames(logbook_df_raw), collapse = ", "), ". Expected labels: ",
+                         paste(user_trt_labels, collapse = ", "))
+                }
+                
+                # Rename the identified treatment column to 'trt' for consistency
+                if (actual_trt_col_name != "trt") {
+                    logbook_df_raw <- logbook_df_raw %>%
+                        rename(trt = !!sym(actual_trt_col_name)) # Use !!sym() for dynamic renaming
+                }
                 
                 logbook_df_raw <- logbook_df_raw %>%
-                    mutate(Plot_Label = paste0(plots, "\n", trt_list_names))
+                    mutate(Plot_Label = paste0(plots, "\n", trt))
                 
                 design_output_agricolae$book <- logbook_df_raw
+                design_output_agricolae$parameters$trt <- "trt" # Confirming the parameter name
                 
                 # Calculate DF for CRD
                 t <- input$numTreatments
@@ -136,12 +179,11 @@ server <- function(input, output, session) {
                     plot_nrows <- ceiling(total_plots / plot_ncols)
                 }
                 
-                # Generate a sequence for columns and repeat for rows
                 col_seq <- rep(1:plot_ncols, length.out = total_plots)
                 row_seq <- ceiling((1:total_plots) / plot_ncols)
                 
                 crd_coords <- tibble(
-                    plots = 1:total_plots, # Assuming 'plots' column in logbook goes from 1 to total_plots
+                    plots = 1:total_plots,
                     row_coord = row_seq,
                     col_coord = col_seq
                 )
@@ -149,23 +191,47 @@ server <- function(input, output, session) {
                 # --- End CRD Coordinates ---
                 
             } else if (design_type_local == "Randomized Complete Block Design") {
-                req(input$numTreatments)
-                trt_names <- paste0("T", 1:input$numTreatments)
+                req(input$numTreatments, input$treatmentLabels)
+                user_trt_labels <- unlist(str_split(input$treatmentLabels, ",")) %>% str_trim()
+                user_trt_labels <- user_trt_labels[user_trt_labels != ""]
+                
+                if (length(user_trt_labels) == 0) {
+                    stop("Please enter valid treatment labels.")
+                }
+                if (length(user_trt_labels) != input$numTreatments) {
+                    stop(paste0("Number of treatment labels (", length(user_trt_labels), ") does not match 'Number of Treatments' (", input$numTreatments, ")."))
+                }
+                
                 design_output_agricolae <- agricolae::design.rcbd(
-                    trt = trt_names,
-                    r = input$numReplications # Removed fixed seed here
+                    trt = user_trt_labels,
+                    r = input$numReplications
                 )
                 logbook_df_raw <- design_output_agricolae$book
-                design_output_agricolae$parameters$trt <- "trt_names"
-                design_output_agricolae$parameters$block <- "block"
+                
+                # FIND THE ACTUAL TREATMENT COLUMN NAME
+                actual_trt_col_name <- find_factor_column(logbook_df_raw, user_trt_labels)
+                
+                if (is.null(actual_trt_col_name)) {
+                    stop("Could not find the treatment column in RCBD design output. Columns found: ",
+                         paste(colnames(logbook_df_raw), collapse = ", "), ". Expected labels: ",
+                         paste(user_trt_labels, collapse = ", "))
+                }
+                
+                # Rename the identified treatment column to 'trt' for consistency
+                if (actual_trt_col_name != "trt") {
+                    logbook_df_raw <- logbook_df_raw %>%
+                        rename(trt = !!sym(actual_trt_col_name))
+                }
                 
                 logbook_df_raw <- logbook_df_raw %>%
-                    mutate(Plot_Label = paste0(plots, "\n", trt_names)) %>%
+                    mutate(Plot_Label = paste0(plots, "\n", trt)) %>%
                     group_by(block) %>%
                     mutate(Plot_Position_In_Block = row_number()) %>%
                     ungroup()
                 
                 design_output_agricolae$book <- logbook_df_raw
+                design_output_agricolae$parameters$trt <- "trt"
+                design_output_agricolae$parameters$block <- "block"
                 
                 # Calculate DF for RCBD
                 t <- input$numTreatments
@@ -183,12 +249,10 @@ server <- function(input, output, session) {
                 )
                 
                 # --- Calculate Row and Column Coordinates for RCBD ---
-                # For RCBD, a common layout is blocks as rows or columns.
-                # Let's assume blocks are arranged vertically (rows) and plots within blocks horizontally (columns).
                 rcbd_coords <- logbook_df_raw %>%
                     arrange(block, plots) %>% # Ensure consistent ordering
                     group_by(block) %>%
-                    mutate(col_coord = row_number()) %>% # Plot_Position_In_Block is already this
+                    mutate(col_coord = row_number()) %>%
                     ungroup() %>%
                     mutate(row_coord = as.integer(as.factor(block))) %>% # Each block is a row
                     select(plots, row_coord, col_coord)
@@ -197,20 +261,57 @@ server <- function(input, output, session) {
                 # --- End RCBD Coordinates ---
                 
             } else if (design_type_local == "Split-Plot Design") {
-                req(input$wpLevels, input$spLevels)
-                wp_factors <- paste0("A", 1:input$wpLevels)
-                sp_factors <- paste0("B", 1:input$spLevels)
+                req(input$wpLevels, input$spLevels, input$wpLabels, input$spLabels)
+                
+                user_wp_labels <- unlist(str_split(input$wpLabels, ",")) %>% str_trim()
+                user_wp_labels <- user_wp_labels[user_wp_labels != ""]
+                user_sp_labels <- unlist(str_split(input$spLabels, ",")) %>% str_trim()
+                user_sp_labels <- user_sp_labels[user_sp_labels != ""]
+                
+                if (length(user_wp_labels) == 0) {
+                    stop("Please enter valid Whole Plot labels.")
+                }
+                if (length(user_sp_labels) == 0) {
+                    stop("Please enter valid Subplot labels.")
+                }
+                if (length(user_wp_labels) != input$wpLevels) {
+                    stop(paste0("Number of Whole Plot labels (", length(user_wp_labels), ") does not match 'Number of Whole Plot Levels' (", input$wpLevels, ")."))
+                }
+                if (length(user_sp_labels) != input$spLevels) {
+                    stop(paste0("Number of Subplot labels (", length(user_sp_labels), ") does not match 'Number of Subplot Levels' (", input$spLevels, ")."))
+                }
+                
                 design_output_agricolae <- agricolae::design.split(
-                    trt1 = wp_factors,
-                    trt2 = sp_factors,
-                    r = input$numReplications, # r is blocks in split-plot
+                    trt1 = user_wp_labels,
+                    trt2 = user_sp_labels,
+                    r = input$numReplications,
                     design = "rcbd"
                 )
                 logbook_df_raw <- design_output_agricolae$book
                 
+                # --- FIND THE ACTUAL WHOLE PLOT AND SUBPLOT FACTOR COLUMN NAMES ---
+                actual_trt1_col_name <- find_factor_column(logbook_df_raw, user_wp_labels)
+                actual_trt2_col_name <- find_factor_column(logbook_df_raw, user_sp_labels)
+                
+                if (is.null(actual_trt1_col_name) || is.null(actual_trt2_col_name)) {
+                    stop("Could not find Whole Plot (trt1) or Subplot (trt2) columns in Split-Plot design output. ",
+                         "Columns found: ", paste(colnames(logbook_df_raw), collapse = ", "),
+                         ". Expected Whole Plot labels: ", paste(user_wp_labels, collapse = ", "),
+                         ". Expected Subplot labels: ", paste(user_sp_labels, collapse = ", "))
+                }
+                
+                # Rename to 'trt1' and 'trt2' for consistency if they are named differently
+                if (actual_trt1_col_name != "trt1") {
+                    logbook_df_raw <- logbook_df_raw %>%
+                        rename(trt1 = !!sym(actual_trt1_col_name))
+                }
+                if (actual_trt2_col_name != "trt2") {
+                    logbook_df_raw <- logbook_df_raw %>%
+                        rename(trt2 = !!sym(actual_trt2_col_name))
+                }
+                
                 logbook_df_raw <- logbook_df_raw %>%
-                    dplyr::rename(trt1 = wp_factors, trt2 = sp_factors) %>%
-                    dplyr::mutate(TRT_COMB = paste0(trt1, trt2))
+                    dplyr::mutate(TRT_COMB = paste0(trt1, "-", trt2))
                 
                 logbook_df_raw <- logbook_df_raw %>%
                     mutate(Plot_Label = paste0(plots, "-", splots, "\n", TRT_COMB))
@@ -220,10 +321,10 @@ server <- function(input, output, session) {
                 design_output_agricolae$parameters$block <- "block"
                 design_output_agricolae$book <- logbook_df_raw
                 
-                # Calculate DF for Split-Plot (RCBD for whole plots) - CORRECTED
-                r <- input$numReplications # Blocks
-                A <- input$wpLevels        # Whole plot levels
-                B_sp <- input$spLevels     # Subplot levels (renamed to avoid conflict with `agricolae`'s `B`)
+                # Calculate DF for Split-Plot (RCBD for whole plots)
+                r <- input$numReplications
+                A <- input$wpLevels
+                B_sp <- input$spLevels
                 total_plots <- r * A * B_sp
                 
                 df_block <- r - 1
@@ -242,32 +343,26 @@ server <- function(input, output, session) {
                 )
                 
                 # --- Calculate Row and Column Coordinates for Split-Plot ---
-                # Ensure `plots`, `splots`, and `block` are numeric/integer for calculations.
-                # agricolae's `book` usually has `plots` and `splots` as integers,
-                # but `block` might be a factor. Let's make sure they are integers for consistency.
                 split_plot_coords <- logbook_df_raw %>%
                     mutate(
-                        block_int = as.integer(as.character(block)), # Convert block to integer
-                        plots_int = as.integer(plots),              # Ensure plots is integer
-                        splots_int = as.integer(splots)             # Ensure splots is integer
+                        block_int = as.integer(as.character(block)),
+                        plots_int = as.integer(plots),
+                        splots_int = as.integer(splots)
                     ) %>%
                     arrange(block_int, plots_int, splots_int) %>%
                     group_by(block_int) %>%
                     mutate(
                         row_coord = block_int,
-                        # Col coordinate will be based on position of whole plot and subplot within the block
-                        # Each whole plot occupies B_sp columns
                         col_coord = (plots_int - 1) * B_sp + splots_int
                     ) %>%
                     ungroup() %>%
-                    # Select relevant columns for rv$plot_coords
                     select(plots = plots_int, splots = splots_int, block = block_int, row_coord, col_coord)
                 
                 rv$plot_coords <- split_plot_coords
                 # --- End Split-Plot Coordinates ---
             }
             
-            req(logbook_df_raw) # Ensure data exists before processing
+            req(logbook_df_raw)
             
             # --- Identify and prepare columns for the standardized logbook table ---
             standard_plot <- logbook_df_raw$plots
@@ -280,40 +375,34 @@ server <- function(input, output, session) {
                 standard_block <- as.character(logbook_df_raw$block)
             }
             
-            if (design_type_local == "Completely Randomized Design") {
-                if ("trt_list_names" %in% colnames(logbook_df_raw)) {
-                    standard_treatment <- as.character(logbook_df_raw$trt_list_names)
-                }
-            } else if (design_type_local == "Randomized Complete Block Design") {
-                if ("trt_names" %in% colnames(logbook_df_raw)) {
-                    standard_treatment <- as.character(logbook_df_raw$trt_names)
+            if (design_type_local == "Completely Randomized Design" || design_type_local == "Randomized Complete Block Design") {
+                if ("trt" %in% colnames(logbook_df_raw)) { # 'trt' should be consistent due to renaming
+                    standard_treatment <- as.character(logbook_df_raw$trt)
                 }
             } else if (design_type_local == "Split-Plot Design") {
                 if ("TRT_COMB" %in% colnames(logbook_df_raw)) {
                     standard_treatment <- as.character(logbook_df_raw$TRT_COMB)
                 }
-                if ("trt1" %in% colnames(logbook_df_raw)) {
+                if ("trt1" %in% colnames(logbook_df_raw)) { # 'trt1' should be consistent
                     standard_wp_factor <- as.character(logbook_df_raw$trt1)
                 }
-                if ("trt2" %in% colnames(logbook_df_raw)) {
+                if ("trt2" %in% colnames(logbook_df_raw)) { # 'trt2' should be consistent
                     standard_sp_factor <- as.character(logbook_df_raw$trt2)
                 }
             }
             
             # Create the standardized dataframe for table and download
-            standardized_df <- NULL # Initialize to NULL for clarity
+            standardized_df <- NULL
             if (design_type_local == "Split-Plot Design") {
-                # Ensure `plots`, `splots`, and `block` are consistent types for joining
                 standardized_df <- tibble(
-                    Plot = as.integer(logbook_df_raw$plots), # Whole Plot Number
-                    Subplot = as.integer(logbook_df_raw$splots), # Subplot Number
-                    Block = as.integer(as.character(logbook_df_raw$block)), # Convert block to integer
+                    Plot = as.integer(logbook_df_raw$plots),
+                    Subplot = as.integer(logbook_df_raw$splots),
+                    Block = as.integer(as.character(logbook_df_raw$block)),
                     Treatment = as.factor(standard_treatment),
                     WholePlotFactor = as.factor(standard_wp_factor),
                     SubplotFactor = as.factor(standard_sp_factor)
                 ) %>%
                     select_if(~!all(is.na(.))) %>%
-                    # Join using the numeric versions of plots, splots, and block
                     left_join(rv$plot_coords, by = c("Plot" = "plots", "Subplot" = "splots", "Block" = "block"))
             } else {
                 standardized_df <- tibble(
@@ -334,12 +423,12 @@ server <- function(input, output, session) {
         }, error = function(e) {
             message("Design generation failed for ", design_type_local, ": ", e$message)
             showNotification(paste("Error generating layout for", design_type_local, ": ", e$message,
-                                   "Please ensure valid combinations for treatments/factors and replications."),
+                                   "Please ensure valid combinations for treatments/factors and replications, and correct number of labels."),
                              type = "error", duration = 8)
             rv$logbook <- NULL
             rv$design_output <- NULL
-            rv$anova_df <- NULL # Clear ANOVA table on error
-            rv$plot_coords <- NULL # Clear plot coordinates on error
+            rv$anova_df <- NULL
+            rv$plot_coords <- NULL
             output$layoutTable <- renderTable(NULL)
             output$generatedLayoutPlot <- renderPlot(NULL)
             output$anovaTable <- renderTable(NULL)
@@ -370,7 +459,7 @@ server <- function(input, output, session) {
         
         if (design_type_local == "Completely Randomized Design") {
             labels_crd <- "Plot_Label"
-            factor_name_crd <- "trt_list_names"
+            factor_name_crd <- "trt"
             
             total_plots <- nrow(plot_data_book)
             plot_ncols <- input$crd_ncols
@@ -395,19 +484,19 @@ server <- function(input, output, session) {
                 ncols = plot_ncols,
                 nrows = plot_nrows
             ) +
-                theme(plot.margin = unit(c(1, 1, 1, 1), "cm")) # Added plot.margin
+                theme(plot.margin = unit(c(1, 1, 1, 1), "cm"))
             
         } else if (design_type_local == "Randomized Complete Block Design") {
-            required_cols <- c("plots", "block", "trt_names", "Plot_Label", "Plot_Position_In_Block")
+            required_cols <- c("plots", "block", "trt", "Plot_Label", "Plot_Position_In_Block")
             if (!all(required_cols %in% colnames(plot_data_book))) {
                 return(NULL)
             }
             
             plot_data_book$block <- factor(plot_data_book$block)
-            plot_data_book$trt_names <- factor(plot_data_book$trt_names)
+            plot_data_book$trt <- factor(plot_data_book$trt)
             
             p <- ggplot(plot_data_book, aes(x = Plot_Position_In_Block, y = 1)) +
-                geom_tile(aes(fill = trt_names), color = "black", linewidth = 0.5) +
+                geom_tile(aes(fill = trt), color = "black", linewidth = 0.5) +
                 geom_text(aes(label = Plot_Label), color = "black", size = 4) +
                 facet_wrap(~ block, scales = "fixed", ncol = 1, strip.position = "left") +
                 scale_fill_discrete(name = "Treatment") +
@@ -421,13 +510,13 @@ server <- function(input, output, session) {
                     axis.ticks.x = element_blank(),
                     axis.title.x = element_blank(),
                     axis.text.y = element_blank(),
-                    axis.ticks.y = element_blank(),
+                    axis.ticks.y = element_blank(), # FIX: Changed from element.blank()
                     panel.spacing.y = unit(0.5, "cm"),
                     legend.position = "right",
                     legend.title = element_text(size = 12),
                     legend.text = element_text(size = 10),
                     panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
-                    plot.margin = unit(c(1, 1, 1, 1), "cm") # Added plot.margin
+                    plot.margin = unit(c(1, 1, 1, 1), "cm")
                 )
             
         } else if (design_type_local == "Split-Plot Design") {
@@ -450,7 +539,7 @@ server <- function(input, output, session) {
                 labels = labels_split,
                 y = block_split
             ) +
-                theme(plot.margin = unit(c(1, 1, 1, 1), "cm")) # Added plot.margin
+                theme(plot.margin = unit(c(1, 1, 1, 1), "cm"))
         }
         
         if (!is.null(p)) {

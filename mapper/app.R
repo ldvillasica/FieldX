@@ -12,7 +12,7 @@ library(htmltools)   # For creating richer HTML for popups
 library(htmlwidgets) # To save the map as HTML
 library(shinyjs)     # For showing/hiding UI elements
 library(tibble)      # For rownames_to_column (if not automatically loaded by dplyr/tidyverse)
-library(leaflet.extras) # For adding extra Leaflet components like minimap and search
+# library(leaflet.extras) # Not needed if addMiniMap and addSearchFeatures are omitted
 
 # --- Helper Function for Popup Content (Reusable for app and download) ---
 generate_popup_html <- function(data_row) {
@@ -107,7 +107,7 @@ generate_popup_html <- function(data_row) {
 
 # --- UI (User Interface) ---
 ui <- dashboardPage(
-    dashboardHeader(title = "Regional Point Data Explorer"),
+    dashboardHeader(title = "Point Data Plotter"),
     dashboardSidebar(
         sidebarMenu(
             id = "sidebarMenu", # Add ID for updating tabs
@@ -118,26 +118,12 @@ ui <- dashboardPage(
     dashboardBody(
         useShinyjs(), # Initialize shinyjs
         
-        # Explicitly load leaflet.extras dependencies (These are fine to keep here)
-        tags$head(
-            htmlDependency(
-                "leaflet-search", "2.9.0", # Version might vary slightly
-                src = c(href = "https://cdn.jsdelivr.net/npm/leaflet-search@2.9.0/dist/"),
-                script = "leaflet-search.min.js",
-                stylesheet = "leaflet-search.min.css"
-            ),
-            htmlDependency(
-                "leaflet-minimap", "3.6.1", # Version might vary slightly
-                src = c(href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet-minimap/3.6.1/"),
-                script = "Control.MiniMap.min.js",
-                stylesheet = "Control.MiniMap.min.css"
-            )
-        ),
+        # Omitted leaflet-search and leaflet-minimap htmlDependencies
         
         tabItems(
             # Tab 1: Data Upload
             tabItem(tabName = "upload_data",
-                    h2("Upload Your Regional Point Data"),
+                    h2("Upload Your Point Data"),
                     fluidRow(
                         box(
                             title = "Data Input", status = "primary", solidHeader = TRUE,
@@ -237,10 +223,6 @@ server <- function(input, output, session) {
             stop(paste("Error reading CSV file:", e$message))
         })
         
-        print(paste("Raw data loaded. Dimensions:", nrow(df), "rows,", ncol(df), "columns."))
-        print("Raw data columns:")
-        print(names(df))
-        
         df
     })
     
@@ -331,10 +313,6 @@ server <- function(input, output, session) {
             as.numeric(input$input_crs_epsg)
         }
         
-        print(paste("Selected X column:", input$x_coord_col))
-        print(paste("Selected Y column:", input$y_coord_col))
-        print(paste("Input CRS EPSG code:", input_crs_code))
-        
         # Validate coordinate columns exist and are numeric
         if (!all(c(input$x_coord_col, input$y_coord_col) %in% names(df))) {
             stop("Selected X or Y coordinate column not found in data. Please check data columns.")
@@ -366,29 +344,14 @@ server <- function(input, output, session) {
             stop(paste("Error creating spatial points (st_as_sf): ", e$message, ". Check X/Y columns or Input CRS. Common issues: non-numeric coordinates, incorrect EPSG code.", sep=""))
         })
         
-        # Create character version of Site_ID for potential future search
-        if ("Site_ID" %in% names(sf_obj)) {
-            sf_obj$Site_ID_char <- as.character(sf_obj$Site_ID) 
-        } else {
-            sf_obj$Search_ID_char <- as.character(sf_obj[[names(sf_obj)[1]]]) 
-            warning("Site_ID column not found for search. Using first column for search propertyName.")
-        }
-        
-        # Print CRS information
-        print(paste("SF object created. Original CRS:", st_crs(sf_obj)$epsg, "or", st_crs(sf_obj)$proj4string))
-        
         # Leaflet always expects WGS84 (EPSG:4326) for adding markers and base layers.
         # If the input data is in a projected CRS (e.g., UTM), it must be transformed to WGS84 for Leaflet.
         if (st_crs(sf_obj)$epsg != 4326) {
-            print("Transforming data to EPSG:4326 (WGS84) for Leaflet display.")
             sf_obj <- tryCatch({
                 st_transform(sf_obj, crs = 4326)
             }, error = function(e) {
                 stop(paste("Error transforming data to WGS84 for map display: ", e$message, ". Ensure PROJ data is available or check input CRS.", sep=""))
             })
-            print(paste("Data transformed. New CRS:", st_crs(sf_obj)$epsg))
-        } else {
-            print("Data already in EPSG:4326 (WGS84). No transformation needed.")
         }
         
         # Validate transformed coordinates
@@ -397,8 +360,6 @@ server <- function(input, output, session) {
             stop("Transformed coordinates are outside valid Lat/Lon range. Please double-check your input data and selected CRS.")
         }
         
-        print(paste("Number of points after processing:", nrow(sf_obj)))
-        
         sf_obj
     })
     
@@ -406,7 +367,6 @@ server <- function(input, output, session) {
     center_map_coords <- reactive({
         sf_obj <- spatial_points_sf() # Depend on the *processed* spatial data
         if (is.null(sf_obj) || nrow(sf_obj) == 0) {
-            print("No spatial data available to calculate center.")
             return(NULL)
         }
         
@@ -421,7 +381,6 @@ server <- function(input, output, session) {
             warning("Calculated center coordinates are invalid (NaN or outside geographic bounds). Using default center.")
             return(NULL)
         }
-        print(paste("Calculated map center: Lon =", mean_lon, ", Lat =", mean_lat))
         list(lon = mean_lon, lat = mean_lat)
     })
     
@@ -445,9 +404,6 @@ server <- function(input, output, session) {
             pal <- colorNumeric("viridis", domain = sf_data[[color_by_var]], na.color = "transparent")
             colors <- pal(sf_data[[color_by_var]])
             colors[is.na(colors)] <- "#808080" # Grey for NA values
-            print(paste("Coloring points by:", color_by_var))
-        } else {
-            print("Not coloring points by a numeric variable (or variable not found/numeric). Using default red.")
         }
         
         # Generate popups for the live app display
@@ -462,16 +418,14 @@ server <- function(input, output, session) {
             addLayersControl(
                 baseGroups = c("OpenStreetMap", "Satellite"),
                 options = layersControlOptions(collapsed = FALSE)
-            ) # Removed addMiniMap and addSearchFeatures
+            ) 
         
         # Set initial view
         if (!is.null(map_center)) {
             m <- m %>% setView(lng = map_center$lon, lat = map_center$lat, zoom = 10) # Zoom for regional view
-            print(paste("Map view set to calculated center: Lon=", map_center$lon, ", Lat=", map_center$lat, ", Zoom=10"))
         } else {
             # Default to a general Caraga Region center if no data or invalid coords
             m <- m %>% setView(lng = 125.54, lat = 8.94, zoom = 9) # Butuan City/Caraga Region
-            print("Using default map center due to invalid or missing calculated coordinates.")
         }
         
         # Add markers with popups for the live app
@@ -483,7 +437,7 @@ server <- function(input, output, session) {
                 stroke = TRUE,
                 fillOpacity = 0.8,
                 popup = popups_html_live_app, # Add popups to live app
-                group = "Data Points" # IMPORTANT: Assign a group name for searching (even if search box is not present)
+                group = "Data Points" 
             )
         
         # Add legend if coloring by a variable for app display
@@ -491,7 +445,6 @@ server <- function(input, output, session) {
             m <- m %>% addLegend(pal = pal, values = sf_data[[color_by_var]], title = color_by_var, position = "bottomright")
         }
         
-        print("Leaflet map object created.")
         m
     })
     
@@ -533,7 +486,7 @@ server <- function(input, output, session) {
                 addLayersControl(
                     baseGroups = c("OpenStreetMap", "Satellite"),
                     options = layersControlOptions(collapsed = FALSE)
-                ) # Removed addMiniMap and addSearchFeatures
+                ) 
             
             if (!is.null(map_center_download)) {
                 m_download <- m_download %>% setView(lng = map_center_download$lon, lat = map_center_download$lat, zoom = 10)
@@ -550,7 +503,7 @@ server <- function(input, output, session) {
                     stroke = TRUE,
                     fillOpacity = 0.8,
                     popup = popups_html_download, # Add popups to downloaded map
-                    group = "Data Points" # IMPORTANT: Assign a group name for searching (even if search box is not present)
+                    group = "Data Points" 
                 )
             
             # Add legend to the downloaded map if coloring by a variable

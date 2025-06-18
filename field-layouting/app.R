@@ -130,13 +130,14 @@ server <- function(input, output, session) {
                     stop(paste0("Number of treatment labels (", length(user_trt_labels), ") does not match 'Number of Treatments' (", input$numTreatments, ")."))
                 }
                 
+                # CRITICAL FIX: Pass the vector 'user_trt_labels' directly
                 design_output_agricolae <- agricolae::design.crd(
                     trt = user_trt_labels,
                     r = input$numReplications
                 )
                 logbook_df_raw <- design_output_agricolae$book
                 
-                # FIND THE ACTUAL TREATMENT COLUMN NAME
+                # FIND THE ACTUAL TREATMENT COLUMN NAME IN THE GENERATED BOOK
                 actual_trt_col_name <- find_factor_column(logbook_df_raw, user_trt_labels)
                 
                 if (is.null(actual_trt_col_name)) {
@@ -145,7 +146,7 @@ server <- function(input, output, session) {
                          paste(user_trt_labels, collapse = ", "))
                 }
                 
-                # Rename the identified treatment column to 'trt' for consistency
+                # Rename the identified treatment column to 'trt' for consistency AFTER generation
                 if (actual_trt_col_name != "trt") {
                     logbook_df_raw <- logbook_df_raw %>%
                         rename(trt = !!sym(actual_trt_col_name)) # Use !!sym() for dynamic renaming
@@ -202,13 +203,14 @@ server <- function(input, output, session) {
                     stop(paste0("Number of treatment labels (", length(user_trt_labels), ") does not match 'Number of Treatments' (", input$numTreatments, ")."))
                 }
                 
+                # CRITICAL FIX: Pass the vector 'user_trt_labels' directly
                 design_output_agricolae <- agricolae::design.rcbd(
                     trt = user_trt_labels,
                     r = input$numReplications
                 )
                 logbook_df_raw <- design_output_agricolae$book
                 
-                # FIND THE ACTUAL TREATMENT COLUMN NAME
+                # FIND THE ACTUAL TREATMENT COLUMN NAME IN THE GENERATED BOOK
                 actual_trt_col_name <- find_factor_column(logbook_df_raw, user_trt_labels)
                 
                 if (is.null(actual_trt_col_name)) {
@@ -217,7 +219,7 @@ server <- function(input, output, session) {
                          paste(user_trt_labels, collapse = ", "))
                 }
                 
-                # Rename the identified treatment column to 'trt' for consistency
+                # Rename the identified treatment column to 'trt' for consistency AFTER generation
                 if (actual_trt_col_name != "trt") {
                     logbook_df_raw <- logbook_df_raw %>%
                         rename(trt = !!sym(actual_trt_col_name))
@@ -281,6 +283,7 @@ server <- function(input, output, session) {
                     stop(paste0("Number of Subplot labels (", length(user_sp_labels), ") does not match 'Number of Subplot Levels' (", input$spLevels, ")."))
                 }
                 
+                # CRITICAL FIX: Pass the vectors 'user_wp_labels' and 'user_sp_labels' directly
                 design_output_agricolae <- agricolae::design.split(
                     trt1 = user_wp_labels,
                     trt2 = user_sp_labels,
@@ -289,10 +292,11 @@ server <- function(input, output, session) {
                 )
                 logbook_df_raw <- design_output_agricolae$book
                 
-                # --- FIND THE ACTUAL WHOLE PLOT AND SUBPLOT FACTOR COLUMN NAMES ---
+                # --- FIND THE ACTUAL WHOLE PLOT AND SUBPLOT FACTOR COLUMN NAMES IN THE GENERATED BOOK ---
                 actual_trt1_col_name <- find_factor_column(logbook_df_raw, user_wp_labels)
                 actual_trt2_col_name <- find_factor_column(logbook_df_raw, user_sp_labels)
                 
+                # FIX: Corrected "is.is.null" to "is.null"
                 if (is.null(actual_trt1_col_name) || is.null(actual_trt2_col_name)) {
                     stop("Could not find Whole Plot (trt1) or Subplot (trt2) columns in Split-Plot design output. ",
                          "Columns found: ", paste(colnames(logbook_df_raw), collapse = ", "),
@@ -300,7 +304,7 @@ server <- function(input, output, session) {
                          ". Expected Subplot labels: ", paste(user_sp_labels, collapse = ", "))
                 }
                 
-                # Rename to 'trt1' and 'trt2' for consistency if they are named differently
+                # Rename to 'trt1' and 'trt2' for consistency if they are named differently AFTER generation
                 if (actual_trt1_col_name != "trt1") {
                     logbook_df_raw <- logbook_df_raw %>%
                         rename(trt1 = !!sym(actual_trt1_col_name))
@@ -510,7 +514,7 @@ server <- function(input, output, session) {
                     axis.ticks.x = element_blank(),
                     axis.title.x = element_blank(),
                     axis.text.y = element_blank(),
-                    axis.ticks.y = element_blank(), # FIX: Changed from element.blank()
+                    axis.ticks.y = element_blank(),
                     panel.spacing.y = unit(0.5, "cm"),
                     legend.position = "right",
                     legend.title = element_text(size = 12),

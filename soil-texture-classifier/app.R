@@ -176,7 +176,7 @@ server <- function(input, output, session) {
                 CLAY = (CLAY / SUM_SSC) * 100  # Normalize Clay
             ) %>%
             ungroup() %>% # Remove row-wise grouping
-            select(-SUM_SSC) # Remove the temporary sum column
+            dplyr::select(-SUM_SSC) # Remove the temporary sum column using dplyr::select
         
         # --- MANUAL SOIL TEXTURE CLASSIFICATION ---
         # Apply the custom 'classify_soil_texture' function to each row of the dataframe.

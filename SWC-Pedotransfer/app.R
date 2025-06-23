@@ -10,7 +10,7 @@ library(tidyr) # For pivot_longer
 ui <- fluidPage(
     # Application title
     titlePanel(div(style = "color: #2c3e50; text-align: center; font-weight: bold;",
-                   "Bagnall et al. (2022) Pedotransfer Functions for Plant Available Water")),
+                   "Pedotransfer Functions for Plant Available Water")),
     
     # Sidebar layout with input and output sections
     sidebarLayout(

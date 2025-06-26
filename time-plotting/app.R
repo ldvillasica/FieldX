@@ -1,12 +1,13 @@
 # app.R
 # This R Shiny application allows users to upload a CSV file, select
 # a date column and multiple value columns, and visualize the time series data
-# interactively as line graphs using plotly. Users can also filter the data by a date range.
+# interactively as line graphs using plotly. Users can also filter the data by a date range,
+# and now, facet the plots by a selected categorical variable.
 
 # Install necessary packages if not already installed
 if (!require(shiny)) install.packages("shiny")
 if (!require(tidyverse)) install.packages("tidyverse") # For data manipulation and ggplot2
-if (!require(plotly)) install.packages("plotly")       # For interactive plots
+if (!require(plotly)) install.packages("plotly")        # For interactive plots
 
 # Load the packages
 library(shiny)
@@ -68,6 +69,9 @@ ui <- fluidPage(
             # 'multiple = TRUE' allows selection of multiple variables
             uiOutput("valueColumnSelect"),
             
+            # NEW: Dropdown to select a categorical variable for faceting
+            uiOutput("facetColumnSelect"),
+            
             # Horizontal line for visual separation
             tags$hr(),
             
@@ -118,12 +122,27 @@ server <- function(input, output, session) {
         selectInput("valueCols", "Select Value Column(s):", choices = numeric_cols, multiple = TRUE)
     })
     
+    # NEW: Render UI for selecting the facet column
+    output$facetColumnSelect <- renderUI({
+        df <- data_input()
+        # Get column names that are non-numeric (potential categorical variables)
+        # Exclude the selected date column from this list
+        non_numeric_cols <- names(df)[sapply(df, function(x) !is.numeric(x))]
+        # Filter out the selected date column to avoid self-selection
+        if (!is.null(input$dateCol)) {
+            non_numeric_cols <- non_numeric_cols[non_numeric_cols != input$dateCol]
+        }
+        # Add an option for "None" to allow no faceting
+        choices <- c("None" = "", non_numeric_cols)
+        selectInput("facetCol", "Select Faceting Variable (Categorical):", choices = choices)
+    })
+    
     # Reactive expression to prepare the data for plotting
     # This includes parsing dates, pivoting data for multiple variables, filtering, and handling missing selections
     plot_data <- reactive({
         df <- data_input()
-        req(input$dateCol)  # Ensure date column is selected
-        req(input$valueCols) # Ensure at least one value column is selected
+        req(input$dateCol)    # Ensure date column is selected
+        req(input$valueCols)  # Ensure at least one value column is selected
         req(input$dateFormat) # Ensure date format is selected
         
         # Rename selected date column to 'Date' for consistent plotting
@@ -139,18 +158,40 @@ server <- function(input, output, session) {
             df_plot$Date <- as.Date(df_plot$Date, format = input$dateFormat)
         }
         
-        # Select only the Date column and the chosen value columns
-        # Then pivot the data from wide to long format for plotting multiple variables
-        df_plot <- df_plot %>%
-            select(Date, one_of(input$valueCols)) %>%
-            filter(!is.na(Date)) %>% # Filter out rows where Date parsing failed
-            # Pivot data to long format for plotting multiple variables
-            pivot_longer(cols = -Date, names_to = "Variable", values_to = "Value") %>%
-            # Aggregate data to ensure one value per date and variable for smooth lines
-            group_by(Date, Variable) %>%
-            summarize(Value = mean(Value, na.rm = TRUE), .groups = 'drop') %>% # Calculate mean, drop grouping
-            arrange(Date) # Ensure data is ordered by date for continuous lines
+        # Select columns: Date, chosen value columns, and the facet column if selected
+        cols_to_select <- c("Date", input$valueCols)
+        if (!is.null(input$facetCol) && input$facetCol != "") {
+            cols_to_select <- c(cols_to_select, input$facetCol)
+        }
         
+        # FIX: Using base R's bracket notation for column selection to avoid dplyr::select issues
+        # This is more robust against potential dplyr versioning/conflict problems
+        df_plot <- df_plot[, cols_to_select, drop = FALSE] %>%
+            filter(!is.na(Date)) # Filter out rows where Date parsing failed
+        
+        # Pivot the data from wide to long format for plotting multiple variables
+        # If a facet column is selected, ensure it's kept in the pivot
+        if (!is.null(input$facetCol) && input$facetCol != "") {
+            df_plot <- df_plot %>%
+                pivot_longer(cols = -c(Date, !!sym(input$facetCol)), names_to = "Variable", values_to = "Value")
+        } else {
+            df_plot <- df_plot %>%
+                pivot_longer(cols = -Date, names_to = "Variable", values_to = "Value")
+        }
+        
+        # Aggregate data to ensure one value per date, variable (and facet category) for smooth lines
+        if (!is.null(input$facetCol) && input$facetCol != "") {
+            df_plot <- df_plot %>%
+                group_by(Date, Variable, !!sym(input$facetCol)) %>%
+                summarize(Value = mean(Value, na.rm = TRUE), .groups = 'drop')
+        } else {
+            df_plot <- df_plot %>%
+                group_by(Date, Variable) %>%
+                summarize(Value = mean(Value, na.rm = TRUE), .groups = 'drop')
+        }
+        
+        df_plot <- df_plot %>%
+            arrange(Date) # Ensure data is ordered by date for continuous lines
         
         # Apply date range filter if it exists
         if (!is.null(input$dateRange)) {
@@ -164,11 +205,11 @@ server <- function(input, output, session) {
     # Render UI for the date range filter
     # This is dynamically created based on the min/max dates available in the data
     output$dateRangeFilter <- renderUI({
-        df_plot <- plot_data()
+        df_plot_for_dates <- plot_data() # Use a temporary reactive to get overall date range before faceting/filtering
         # Check if df_plot is not empty and contains valid dates after pivoting
-        if (nrow(df_plot) > 0 && !any(is.na(df_plot$Date))) {
-            min_date <- min(df_plot$Date, na.rm = TRUE)
-            max_date <- max(df_plot$Date, na.rm = TRUE)
+        if (nrow(df_plot_for_dates) > 0 && !any(is.na(df_plot_for_dates$Date))) {
+            min_date <- min(df_plot_for_dates$Date, na.rm = TRUE)
+            max_date <- max(df_plot_for_dates$Date, na.rm = TRUE)
             dateRangeInput("dateRange", "Filter by Date Range:",
                            start = min_date,
                            end = max_date,
@@ -215,6 +256,10 @@ server <- function(input, output, session) {
             # Explicitly set x-axis breaks to show yearly labels
             scale_x_date(date_breaks = "1 year", date_labels = "%Y")
         
+        # Add faceting if a facet column is selected
+        if (!is.null(input$facetCol) && input$facetCol != "") {
+            p <- p + facet_wrap(as.formula(paste("~", input$facetCol)), scales = "free_y") # Use free_y for independent y-axes per facet
+        }
         
         # Convert ggplot to an interactive plotly object
         ggplotly(p) %>%

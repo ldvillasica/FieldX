@@ -1,63 +1,110 @@
-# app.R for Descriptive Analysis
+# app.R for Descriptive Analysis with shinydashboard and Kruskal-Wallis
 
 # Load necessary packages
 library(shiny)
-library(dplyr)       # For data manipulation
-library(ggplot2)     # For plotting
-library(DT)          # For interactive data tables
-library(psych)       # For more comprehensive descriptive statistics (e.g., describe())
-# No longer strictly need qqplotr if not doing QQ plots, but no harm in keeping it if already installed.
-# library(qqplotr) # Keeping it commented out as it's not strictly needed for this request
+library(shinydashboard) # For creating dashboards
+library(dplyr)          # For data manipulation
+library(ggplot2)        # For plotting
+library(DT)             # For interactive data tables
+library(psych)          # For more comprehensive descriptive statistics (e.g., describe(), skew, kurtosi)
+library(tidyr)          # For pivot_longer if needed for more complex summary tables
 
 # Define the User Interface (UI)
-ui <- fluidPage(
-    titlePanel("Interactive Data Explorer: Descriptive Analysis"),
+ui <- dashboardPage(
+    dashboardHeader(title = "Interactive Data Explorer"),
     
-    sidebarLayout(
-        sidebarPanel(
-            h3("1. Upload Your Data"),
-            fileInput("file1", "Choose CSV File",
-                      multiple = FALSE,
-                      accept = c("text/csv",
-                                 "text/comma-separated-values,text/plain",
-                                 ".csv")),
-            tags$hr(),
-            checkboxInput("header", "Header", TRUE),
-            radioButtons("sep", "Separator",
-                         choices = c(Comma = ",",
-                                     Semicolon = ";",
-                                     Tab = "\t"),
-                         selected = ","),
-            radioButtons("quote", "Quote",
-                         choices = c(None = "",
-                                     `Double Quote` = "\"",
-                                     `Single Quote` = "'"),
-                         selected = "\""),
-            tags$hr(),
-            h3("2. Select Variables for Analysis"),
-            uiOutput("variableSelectors"), # Dynamic UI for variable selection
-            hr(),
-            h3("3. Plot Customization"),
-            # Input for bin width for histograms, only shown if selected var is numeric
-            conditionalPanel(
-                condition = "input.main_tabs == 'Univariate Plots' && input.selected_variable_univariate != 'None' && output.isNumericSelectedVar", # Use output to check type
-                sliderInput("binwidth_slider", "Number of Bins (Histogram/Density):", min = 5, max = 100, value = 30)
-            )
-            
+    dashboardSidebar(
+        sidebarMenu(
+            id = "main_tabs_sidebar", # Add an ID to the sidebar menu for conditional panel
+            menuItem("Data Upload", tabName = "data_upload", icon = icon("upload")),
+            menuItem("Data Table", tabName = "data_table", icon = icon("table")),
+            menuItem("Summary Statistics", tabName = "summary_stats", icon = icon("calculator")),
+            menuItem("Univariate Plots", tabName = "univariate_plots", icon = icon("chart-bar")),
+            menuItem("Group Comparisons", tabName = "group_comparisons", icon = icon("equals")) # New menu item
         ),
         
-        mainPanel(
-            tabsetPanel(
-                id = "main_tabs",
-                tabPanel("Data Table",
-                         h4("Uploaded Data:"),
-                         DT::dataTableOutput("contents")),
-                tabPanel("Summary Statistics",
-                         h4("Descriptive Statistics:"),
-                         uiOutput("summaryStatsUI")),
-                tabPanel("Univariate Plots",
-                         h4("Univariate Plots:"),
-                         plotOutput("univariatePlot", height = "500px"))
+        # Common controls for data upload and variable selection
+        # These will appear on all tabs since they are in the sidebar
+        tags$hr(),
+        h4("1. Upload Your Data"),
+        fileInput("file1", "Choose CSV File",
+                  multiple = FALSE,
+                  accept = c("text/csv",
+                             "text/comma-separated-values,text/plain",
+                             ".csv")),
+        tags$hr(),
+        checkboxInput("header", "Header", TRUE),
+        radioButtons("sep", "Separator",
+                     choices = c(Comma = ",",
+                                 Semicolon = ";",
+                                 Tab = "\t"),
+                     selected = ","),
+        radioButtons("quote", "Quote",
+                     choices = c(None = "",
+                                 `Double Quote` = "\"",
+                                 `Single Quote` = "'"),
+                     selected = "\""),
+        tags$hr(),
+        h4("2. Select Variables for Analysis"),
+        uiOutput("variableSelectors"), # Dynamic UI for variable selection
+        hr(),
+        h4("3. Plot Customization"),
+        # Input for bin width for histograms, only shown if selected var is numeric
+        conditionalPanel(
+            condition = "input.main_tabs_sidebar == 'univariate_plots' && input.selected_variable_univariate != 'None' && output.isNumericSelectedVar",
+            sliderInput("binwidth_slider", "Number of Bins (Histogram/Density):", min = 5, max = 100, value = 30)
+        ),
+        
+        # Specific controls for Group Comparisons tab
+        conditionalPanel(
+            condition = "input.main_tabs_sidebar == 'group_comparisons'",
+            hr(),
+            h4("4. Group Comparison Settings"),
+            uiOutput("groupComparisonVariableSelectors") # Dedicated selectors for this tab
+        )
+    ),
+    
+    dashboardBody(
+        tabItems(
+            tabItem(tabName = "data_upload",
+                    h2("Upload Your Dataset"),
+                    fluidRow(
+                        box(title = "Instructions", status = "primary", solidHeader = TRUE, width = 12,
+                            p("Please upload your CSV file using the controls in the sidebar."),
+                            p("Ensure you set the correct header, separator, and quote options.")
+                        )
+                    )
+            ),
+            tabItem(tabName = "data_table",
+                    h2("Uploaded Data Table"),
+                    fluidRow(
+                        box(title = "Data Preview", status = "info", solidHeader = TRUE, width = 12,
+                            DT::dataTableOutput("contents")
+                        )
+                    )
+            ),
+            tabItem(tabName = "summary_stats",
+                    h2("Descriptive Statistics"),
+                    uiOutput("summaryStatsUI") # This will render the boxes for each variable
+            ),
+            tabItem(tabName = "univariate_plots",
+                    h2("Univariate Plots"),
+                    fluidRow(
+                        box(title = "Selected Variable Plot", status = "success", solidHeader = TRUE, width = 12,
+                            plotOutput("univariatePlot", height = "500px")
+                        )
+                    )
+            ),
+            tabItem(tabName = "group_comparisons", # New tab content
+                    h2("Group Comparisons"),
+                    fluidRow(
+                        box(title = "Kruskal-Wallis Test", status = "primary", solidHeader = TRUE, width = 12,
+                            p("Performs a Kruskal-Wallis rank sum test to compare distributions across groups."),
+                            p("Requires a numeric dependent variable and a categorical grouping variable with at least 3 unique categories."),
+                            hr(),
+                            verbatimTextOutput("kruskalWallisOutput")
+                        )
+                    )
             )
         )
     )
@@ -90,7 +137,7 @@ server <- function(input, output, session) {
         DT::datatable(data_upload(), options = list(pageLength = 10))
     })
     
-    # Dynamic UI for variable selection (after data is loaded)
+    # Dynamic UI for variable selection (used across multiple tabs for general selection)
     output$variableSelectors <- renderUI({
         df <- data_upload()
         if (is.null(df)) return(NULL)
@@ -104,6 +151,23 @@ server <- function(input, output, session) {
         )
     })
     
+    # Dynamic UI for group comparison specific variable selection
+    output$groupComparisonVariableSelectors <- renderUI({
+        df <- data_upload()
+        if (is.null(df)) return(NULL)
+        
+        numeric_vars <- names(df)[sapply(df, is.numeric)]
+        categorical_vars <- names(df)[sapply(df, function(x) is.factor(x) || is.character(x))]
+        
+        tagList(
+            selectInput("kw_dependent_var", "Select Numeric Dependent Variable (Kruskal-Wallis):",
+                        choices = c("None", numeric_vars), selected = "None"),
+            selectInput("kw_grouping_var", "Select Categorical Grouping Variable (Kruskal-Wallis):",
+                        choices = c("None", categorical_vars), selected = "None")
+        )
+    })
+    
+    
     # Reactive to check if selected_variable_univariate is numeric
     output$isNumericSelectedVar <- reactive({
         df <- data_upload()
@@ -113,40 +177,69 @@ server <- function(input, output, session) {
     outputOptions(output, "isNumericSelectedVar", suspendWhenHidden = FALSE)
     
     
-    # Generate Summary Statistics UI
+    # Generate Summary Statistics UI using boxes for better arrangement
     output$summaryStatsUI <- renderUI({
         df <- data_upload()
-        if (is.null(df)) return(p("Please upload data to view summary statistics."))
+        if (is.null(df)) {
+            return(
+                fluidRow(
+                    box(title = "No Data", status = "warning", solidHeader = TRUE, width = 12,
+                        p("Please upload data to view summary statistics.")
+                    )
+                )
+            )
+        }
         
-        summary_outputs <- lapply(names(df), function(col_name) {
+        summary_boxes <- lapply(names(df), function(col_name) {
             col_data <- df[[col_name]]
+            
             if (is.numeric(col_data)) {
-                desc_df <- psych::describe(col_data, na.rm = TRUE) %>%
-                    as.data.frame() %>%
-                    select(n, mean, sd, min, max, median, mad, se) %>%
-                    t() %>% as.data.frame()
-                colnames(desc_df) <- col_name
-                desc_df <- tibble(Statistic = rownames(desc_df), Value = desc_df[[col_name]])
+                # Get the descriptive statistics from psych::describe
+                desc_output <- psych::describe(col_data, na.rm = TRUE)
                 
-                list(
-                    h5(strong(paste("Numerical Variable:", col_name))),
+                # Manually create the desired tibble (data frame) from specific elements of desc_output
+                desc_df <- tibble(
+                    Statistic = c("n", "Mean", "SD", "Median", "Min", "Max", "Skew", "Kurtosis", "SE"), # Added Skew, Kurtosis
+                    Value = c(
+                        desc_output$n, 
+                        desc_output$mean, 
+                        desc_output$sd, 
+                        desc_output$median, # Ensure median is included
+                        desc_output$min, 
+                        desc_output$max, 
+                        desc_output$skew,    # psych::describe includes skew
+                        desc_output$kurtosis, # psych::describe includes kurtosis
+                        desc_output$se
+                    )
+                )
+                
+                box(
+                    title = paste("Numerical Variable:", col_name),
+                    status = "info",
+                    solidHeader = TRUE,
+                    width = 6, # Adjust width to control how many boxes per row (e.g., 6 for two per row)
                     renderTable(desc_df, rownames = FALSE, caption = paste("Summary for", col_name), caption.placement = "top")
                 )
             } else if (is.factor(col_data) || is.character(col_data)) {
                 freq_table <- as.data.frame(table(col_data))
                 colnames(freq_table) <- c("Category", "Count")
                 freq_table <- freq_table %>%
-                    mutate(Proportion = Count / sum(Count))
+                    mutate(Proportion = Count / sum(Count)) %>%
+                    arrange(desc(Count)) # Order by count for better readability
                 
-                list(
-                    h5(strong(paste("Categorical Variable:", col_name))),
+                box(
+                    title = paste("Categorical Variable:", col_name),
+                    status = "warning",
+                    solidHeader = TRUE,
+                    width = 6, # Adjust width
                     renderTable(freq_table, rownames = FALSE, caption = paste("Frequencies for", col_name), caption.placement = "top")
                 )
             } else {
-                NULL
+                NULL # Do not create a box for other data types
             }
         })
-        tagList(summary_outputs)
+        
+        fluidRow(summary_boxes) # Wrap all generated boxes in a fluidRow
     })
     
     
@@ -166,8 +259,6 @@ server <- function(input, output, session) {
         p <- NULL
         
         if (is.numeric(col_data)) {
-            # If a grouping variable is selected and is categorical, draw grouped box plot.
-            # Otherwise, draw Histogram & Density Plot by default.
             if (grouping_var != "None" && grouping_var %in% names(df) && (is.factor(df[[grouping_var]]) || is.character(df[[grouping_var]]))) {
                 # Grouped Box Plot
                 p <- ggplot(df, aes_string(x = grouping_var, y = selected_var, fill = grouping_var)) +
@@ -186,8 +277,6 @@ server <- function(input, output, session) {
                     theme_minimal()
             }
         } else if (is.factor(col_data) || is.character(col_data)) {
-            # For categorical, we'll draw a bar chart.
-            # If a grouping variable is also selected and is categorical, draw grouped bar chart.
             if (grouping_var != "None" && grouping_var %in% names(df) && (is.factor(df[[grouping_var]]) || is.character(df[[grouping_var]]))) {
                 # Grouped Bar Chart
                 df[[selected_var]] <- as.factor(df[[selected_var]]) # Ensure factors
@@ -209,6 +298,78 @@ server <- function(input, output, session) {
             }
         }
         print(p)
+    })
+    
+    # Kruskal-Wallis Test Output
+    output$kruskalWallisOutput <- renderPrint({
+        req(input$kw_dependent_var, input$kw_grouping_var)
+        
+        df <- data_upload()
+        dep_var_name <- input$kw_dependent_var
+        group_var_name <- input$kw_grouping_var
+        
+        if (is.null(df) || dep_var_name == "None" || group_var_name == "None" ||
+            !(dep_var_name %in% names(df)) || !(group_var_name %in% names(df))) {
+            cat("Please select a numeric dependent variable and a categorical grouping variable to perform the Kruskal-Wallis test.\n")
+            return()
+        }
+        
+        dep_var_data <- df[[dep_var_name]]
+        group_var_data <- df[[group_var_name]]
+        
+        # Ensure grouping variable is a factor and has at least 3 levels (required for KW)
+        group_var_data <- as.factor(group_var_data)
+        
+        if (!is.numeric(dep_var_data)) {
+            cat("Error: Dependent variable must be numeric.\n")
+            return()
+        }
+        
+        if (nlevels(group_var_data) < 2) { # Kruskal-Wallis requires at least 2 groups
+            cat("Error: Grouping variable must have at least 2 unique categories for comparison.\n")
+            return()
+        }
+        
+        if (nlevels(group_var_data) < 3 && input$main_tabs_sidebar == 'group_comparisons') {
+            cat("Kruskal-Wallis test is typically used for comparing 3 or more groups.\n")
+            cat("For 2 groups, consider a Wilcoxon Rank Sum Test (Mann-Whitney U test).\n\n")
+        }
+        
+        # Remove rows with NAs in either variable for the test
+        test_data <- data.frame(dep = dep_var_data, group = group_var_data) %>%
+            na.omit()
+        
+        if (nrow(test_data) == 0) {
+            cat("No complete cases found for the selected variables. Check for missing values.\n")
+            return()
+        }
+        
+        # Perform Kruskal-Wallis test
+        tryCatch({
+            formula_str <- paste(dep_var_name, "~", group_var_name)
+            kw_result <- kruskal.test(as.formula(formula_str), data = df)
+            
+            cat(paste("Kruskal-Wallis Rank Sum Test for", dep_var_name, "by", group_var_name, "\n\n"))
+            print(kw_result)
+            
+            # Add group means/medians for context
+            cat("\n\nDescriptive Statistics by Group:\n")
+            if (is.numeric(dep_var_data)) {
+                df_summary <- df %>%
+                    group_by(across(all_of(group_var_name))) %>%
+                    summarise(
+                        Count = n(),
+                        Mean = mean(!!sym(dep_var_name), na.rm = TRUE),
+                        SD = sd(!!sym(dep_var_name), na.rm = TRUE),
+                        Median = median(!!sym(dep_var_name), na.rm = TRUE)
+                    )
+                print(as.data.frame(df_summary)) # Print as data frame for cleaner output in verbatimTextOutput
+            }
+            
+        }, error = function(e) {
+            cat("An error occurred during the Kruskal-Wallis test:\n")
+            cat(e$message, "\n")
+        })
     })
 }
 

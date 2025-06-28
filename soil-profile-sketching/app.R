@@ -33,6 +33,12 @@ ui <- fluidPage(
                                      "Single Quote" = "'"),
                          selected = '"'),
             tags$hr(),
+            # Sliders for controlling plot width and height
+            sliderInput("plotWidth", "Plot Width (pixels):",
+                        min = 400, max = 1600, value = 900, step = 50),
+            sliderInput("plotHeight", "Plot Height (pixels):",
+                        min = 300, max = 1200, value = 700, step = 50),
+            tags$hr(),
             helpText(
                 "Your CSV file must include columns named exactly:",
                 tags$ul(
@@ -49,13 +55,12 @@ ui <- fluidPage(
         
         mainPanel(
             h3("Soil Profile Sketch with Depth Labeling"),
-            # Use fluidRow and column for better layout control
-            # column(12, ...) makes it take the full width of the mainPanel
-            # offset = 0 means no offset from the left.
-            # You can try using offset for manual centering if the below doesn't work perfectly.
             fluidRow(
-                column(12, align = "center", # 'align = "center"' for column content
-                       plotOutput("profilePlot", width = "90%") # Give plotOutput a specific width
+                column(12, align = "center",
+                       # Make plotOutput width and height reactive to slider inputs
+                       plotOutput("profilePlot",
+                                  width = "auto", # 'auto' or a percentage like '100%' is often good when renderPlot controls size
+                                  height = "auto") # 'auto' or a percentage like '100%'
                 )
             )
         )
@@ -118,7 +123,11 @@ server <- function(input, output) {
                  fixLabelCollisions = TRUE,
                  hz.depths.offset = 0.08)
         }
-    }, res = 96) # Added 'res' argument for better PNG resolution in Shiny
+    },
+    res = 96, # Added 'res' argument for better PNG resolution in Shiny
+    width = function() input$plotWidth,  # Make width reactive to slider
+    height = function() input$plotHeight # Make height reactive to slider
+    )
 }
 
 # ---

@@ -1,526 +1,218 @@
 # app.R
 
 # Load necessary libraries
+# If you don't have these installed, run:
+# install.packages(c("shiny", "leaflet", "ggplot2", "sf", "rnaturalearth", "rnaturalearthdata"))
 library(shiny)
-library(shinydashboard)
-library(readr)       # For flexible CSV reading (read_delim)
-library(dplyr)       # For data manipulation (explicitly called for select)
-library(sf)          # For spatial vector data (modern R spatial)
-library(leaflet)     # For interactive maps
-library(DT)          # For interactive data tables
-library(htmltools)   # For creating richer HTML for popups
-library(htmlwidgets) # To save the map as HTML
-library(shinyjs)     # For showing/hiding UI elements
-library(tibble)      # For rownames_to_column (if not automatically loaded by dplyr/tidyverse)
-# library(leaflet.extras) # Not needed if addMiniMap and addSearchFeatures are omitted
+library(leaflet) # For interactive map
+library(ggplot2) # For static plot and export
+library(sf)      # For spatial data handling
+library(rnaturalearth) # For base map data (countries)
+library(rnaturalearthdata) # For base map data (countries and states)
 
-# --- Helper Function for Popup Content (Reusable for app and download) ---
-generate_popup_html <- function(data_row) {
-    # Ensure data_row is a data frame, not an sf object if it was passed directly
-    row_data_raw <- if (inherits(data_row, "sf")) st_drop_geometry(data_row) else data_row
+# Define UI for application
+ui <- fluidPage(
+    # Application title
+    titlePanel("Coordinate Plotter and Exporter"),
     
-    image_html <- ""
-    data_for_table <- row_data_raw
-    
-    # --- Image Handling ---
-    # Adding subtle border and radius for images
-    if ("photo_url" %in% names(row_data_raw) && !is.na(row_data_raw[["photo_url"]]) && nzchar(as.character(row_data_raw[["photo_url"]]))) {
-        image_url <- as.character(row_data_raw[["photo_url"]])
-        image_html <- paste0("<img src='", image_url, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto; border: 1px solid #ddd; border-radius: 4px;'><br>")
-        data_for_table <- data_for_table %>% dplyr::select(-photo_url) # Remove from table if handled by image
-    } 
-    # Handle photo_path (local image file, relative to www folder)
-    else if ("photo_path" %in% names(data_for_table) && !is.na(data_for_table[["photo_path"]]) && nzchar(as.character(data_for_table[["photo_path"]]))) {
-        local_path <- as.character(data_for_table[["photo_path"]])
-        image_html <- paste0("<img src='", local_path, "' style='max-width:150px; height:auto; display:block; margin: 0 auto 5px auto; border: 1px solid #ddd; border-radius: 4px;'><br>")
-        data_for_table <- data_for_table %>% dplyr::select(-photo_path) # Remove from table if handled by image
-    }
-    
-    # --- Popup Title ---
-    # Try to find a good title for the popup: prioritize common ID/Name/Location columns
-    popup_title_content <- "Point Details"
-    title_found <- FALSE
-    
-    if (!title_found && "name" %in% names(row_data_raw) && !is.na(row_data_raw[["name"]]) && nzchar(as.character(row_data_raw[["name"]]))) {
-        popup_title_content <- as.character(row_data_raw[["name"]])
-        data_for_table <- data_for_table %>% dplyr::select(-name)
-        title_found <- TRUE
-    } else if (!title_found && "id" %in% names(row_data_raw) && !is.na(row_data_raw[["id"]]) && nzchar(as.character(row_data_raw[["id"]]))) {
-        popup_title_content <- paste0("ID: ", as.character(row_data_raw[["id"]]))
-        data_for_table <- data_for_table %>% dplyr::select(-id)
-        title_found <- TRUE
-    } else if (!title_found && "barangay" %in% names(row_data_raw) && !is.na(row_data_raw[["barangay"]]) && nzchar(as.character(row_data_raw[["barangay"]]))) {
-        popup_title_content <- as.character(row_data_raw[["barangay"]])
-        data_for_table <- data_for_table %>% dplyr::select(-barangay)
-        title_found <- TRUE
-    } else if (!title_found && ncol(row_data_raw) > 0 && !is.numeric(row_data_raw[[1]])) {
-        # Fallback: Use the first non-numeric column if no specific title column found
-        first_col_name <- names(row_data_raw)[1]
-        if (first_col_name %in% names(data_for_table) && !is.na(row_data_raw[[first_col_name]]) && nzchar(as.character(row_data_raw[[first_col_name]]))) {
-            popup_title_content <- as.character(row_data_raw[[first_col_name]])
-            data_for_table <- data_for_table %>% dplyr::select(-!!sym(first_col_name))
-            title_found <- TRUE
-        }
-    }
-    
-    # Escape HTML for the title to prevent XSS (if title comes from user data)
-    popup_title_html <- htmlEscape(popup_title_content)
-    
-    # Ensure internal .row_id, coordinates, and other non-display columns are not shown in table
-    data_for_table <- data_for_table %>%
-        dplyr::select_if(~!any(grepl(".row_id|lon|lat|x_coord|y_coord|easting|northing|geom", ., ignore.case = TRUE)))
-    
-    # --- Table Content ---
-    table_rows_html <- lapply(names(data_for_table), function(col_name) {
-        value <- as.character(data_for_table[[col_name]])
-        # Display "N/A" for NA or empty string values
-        display_value <- if (is.na(value) || value == "") "N/A" else htmlEscape(value) # Escape values too
-        
-        paste0(
-            "<tr style='border-bottom: 1px solid #eee;'>", # Subtle row separator
-            "<td style='padding: 4px 8px; font-weight: bold; vertical-align: top;'>", gsub("_", " ", col_name), ":</td>",
-            "<td style='padding: 4px 8px; vertical-align: top;'>", display_value, "</td>", # Data values should wrap by default
-            "</tr>"
-        )
-    })
-    
-    table_html <- paste0(
-        "<table style='width:100%; border-collapse: collapse; font-size: 13px;'>", # Basic table styling
-        "<tbody>",
-        paste(table_rows_html, collapse = ""),
-        "</tbody>",
-        "</table>"
-    )
-    
-    # --- Combine all parts into a wrapper div ---
-    htmltools::HTML(paste0(
-        # Updated max-width and max-height for larger pop-up
-        "<div style='max-width:450px; max-height:400px; overflow-y: auto; overflow-wrap: break-word; text-align: center; padding: 5px; font-family: Arial, sans-serif;'>", 
-        "<h4 style='margin-top:0; margin-bottom: 10px; color: #333; font-size: 16px; border-bottom: 1px solid #ddd; padding-bottom: 5px;'>", popup_title_html, "</h4>",
-        image_html,
-        "<div style='text-align: left; margin-top: 10px; padding: 0 5px;'>", # Align table text left, add padding
-        table_html,
-        "</div>",
-        "</div>"
-    ))
-}
-
-
-# --- UI (User Interface) ---
-ui <- dashboardPage(
-    dashboardHeader(title = "Regional Point Data Explorer"),
-    dashboardSidebar(
-        sidebarMenu(
-            id = "sidebarMenu", # Add ID for updating tabs
-            menuItem("Upload Data", tabName = "upload_data", icon = icon("upload")),
-            menuItem("Map Explorer", tabName = "map_explorer", icon = icon("map-marked-alt"))
-        )
-    ),
-    dashboardBody(
-        useShinyjs(), # Initialize shinyjs
-        
-        # Omitted leaflet-search and leaflet-minimap htmlDependencies
-        
-        tabItems(
-            # Tab 1: Data Upload
-            tabItem(tabName = "upload_data",
-                    h2("Upload Your Regional Point Data"),
-                    fluidRow(
-                        box(
-                            title = "Data Input", status = "primary", solidHeader = TRUE,
-                            width = 6,
-                            fileInput("file1", "Choose CSV File (must contain X, Y coordinates)",
-                                      multiple = FALSE,
-                                      accept = c("text/csv",
-                                                 "text/comma-separated-values,text/plain",
-                                                 ".csv")),
-                            tags$hr(),
-                            checkboxInput("header", "Header", TRUE),
-                            radioButtons("sep", "Separator",
-                                         choices = c(Comma = ",",
-                                                     Semicolon = ";",
-                                                     Tab = "\t"),
-                                         selected = ","),
-                            radioButtons("quote", "Quote",
-                                         choices = c(None = "",
-                                                     "Double Quote" = '"',
-                                                     "Single Quote" = "'"),
-                                         selected = '"'),
-                            actionButton("load_data_btn", "Load Data & Go to Map Explorer")
-                        ),
-                        box(
-                            title = "Data Preview", status = "info", solidHeader = TRUE,
-                            width = 6,
-                            DTOutput("contents")
-                        )
-                    )
-            ),
+    # Sidebar layout with input and output
+    sidebarLayout(
+        sidebarPanel(
+            # Input for CSV file
+            fileInput("file1", "Choose CSV File",
+                      multiple = FALSE,
+                      accept = c("text/csv",
+                                 "text/comma-separated-values,text/plain",
+                                 ".csv")),
             
-            # Tab 2: Map Explorer
-            tabItem(tabName = "map_explorer",
-                    h2("Explore Your Data Points on a Map"),
-                    fluidRow(
-                        box(
-                            title = "Map Controls", status = "primary", solidHeader = TRUE,
-                            width = 4,
-                            uiOutput("x_coord_select"),
-                            uiOutput("y_coord_select"),
-                            selectInput("input_crs_epsg", "Input Data CRS (EPSG Code):",
-                                        choices = c("WGS84 (Lat/Lon) - EPSG:4326" = 4326,
-                                                    "UTM Zone 51N (Philippines) - EPSG:32651" = 32651,
-                                                    "Other (Manual Entry)" = ""),
-                                        selected = 4326), # Default for GPS data
-                            conditionalPanel(
-                                condition = "input.input_crs_epsg == ''",
-                                numericInput("manual_input_crs", "Enter Custom Input CRS EPSG Code:", value = NA, min = 1)
-                            ),
-                            uiOutput("color_var_select"),
-                            checkboxInput("show_data_table", "Show Raw Data Table", TRUE),
-                            actionButton("update_map_btn", "Update Map"),
-                            downloadButton("download_map", "Download Map as HTML")
-                        ),
-                        box(
-                            title = "Interactive Map", status = "info", solidHeader = TRUE,
-                            width = 8,
-                            leafletOutput("map_viewer", height = "600px")
-                        )
-                    )
-                    , # Close fluidRow for map and controls
-                    # Raw Data Table will now be in its own fluidRow, taking full width if no sidebar
-                    fluidRow(
-                        conditionalPanel(
-                            condition = "input.show_data_table", # Show/hide based on checkbox
-                            box(
-                                title = "Raw Data Table", status = "success", solidHeader = TRUE,
-                                width = 12, # Now takes full width of the row
-                                DTOutput("raw_data_table")
-                            )
-                        )
-                    )
-            )
+            # Checkbox for header
+            checkboxInput("header", "Header", TRUE),
+            
+            # Radio buttons for separator
+            radioButtons("sep", "Separator",
+                         choices = c(Comma = ",",
+                                     Semicolon = ";",
+                                     Tab = "\t"),
+                         selected = ","),
+            
+            # Input for Latitude Column Name
+            textInput("lat_col", "Latitude Column Name", value = "latitude"),
+            # Input for Longitude Column Name
+            textInput("lon_col", "Longitude Column Name", value = "longitude"),
+            
+            hr(), # Horizontal rule
+            
+            h4("Static Plot Options"),
+            # Slider for plot point size
+            sliderInput("point_size", "Point Size on Static Plot:",
+                        min = 0.5, max = 10, value = 3, step = 0.5),
+            
+            # Sliders for controlling the static map's bounding box
+            h5("Static Map View Bounding Box:"),
+            sliderInput("min_lon", "Minimum Longitude:",
+                        min = -180, max = 180, value = -180, step = 1),
+            sliderInput("max_lon", "Maximum Longitude:",
+                        min = -180, max = 180, value = 180, step = 1),
+            sliderInput("min_lat", "Minimum Latitude:",
+                        min = -90, max = 90, value = -90, step = 1),
+            sliderInput("max_lat", "Maximum Latitude:",
+                        min = -90, max = 90, value = 90, step = 1),
+            
+            # Button to download the static plot
+            downloadButton("downloadPlot", "Download Static Plot (PNG)")
+        ),
+        
+        # Main panel for displaying outputs
+        mainPanel(
+            h3("Interactive Map (Leaflet)"),
+            leafletOutput("interactiveMap", height = "500px"),
+            hr(),
+            h3("Static Plot Preview (ggplot2)"),
+            plotOutput("staticPlotPreview", height = "500px")
         )
     )
 )
 
-# --- Server Logic ---
+# Define server logic
 server <- function(input, output, session) {
     
-    # Reactive expression to read uploaded data
-    raw_data <- reactive({
-        # Add validate to provide user-friendly error message if no file
-        validate(
-            need(input$file1, "Please upload a CSV file.")
-        )
+    # Reactive expression to read the uploaded CSV data
+    data_points <- reactive({
+        req(input$file1) # Ensure a file is uploaded
         
-        inFile <- input$file1
-        df <- tryCatch({
-            read_delim(inFile$datapath,
-                       col_names = input$header,
-                       delim = input$sep,
-                       quote = input$quote,
-                       show_col_types = FALSE) # Suppress column specification messages
+        tryCatch({
+            df <- read.csv(input$file1$datapath,
+                           header = input$header,
+                           sep = input$sep)
+            
+            # Validate column names
+            lat_col_name <- input$lat_col
+            lon_col_name <- input$lon_col
+            
+            if (!lat_col_name %in% names(df) || !lon_col_name %in% names(df)) {
+                stop("Specified latitude or longitude column not found in the file. Please check column names.")
+            }
+            
+            # Convert to numeric and remove rows with NA in lat/lon
+            df[[lat_col_name]] <- as.numeric(df[[lat_col_name]])
+            df[[lon_col_name]] <- as.numeric(df[[lon_col_name]])
+            df <- na.omit(df[, c(lat_col_name, lon_col_name)])
+            
+            # Filter out invalid coordinates (e.g., outside -90 to 90 for lat, -180 to 180 for lon)
+            df <- df[df[[lat_col_name]] >= -90 & df[[lat_col_name]] <= 90, ]
+            df <- df[df[[lon_col_name]] >= -180 & df[[lon_col_name]] <= 180, ]
+            
+            if (nrow(df) == 0) {
+                stop("No valid coordinate data found after processing.")
+            }
+            
+            df
+            
         }, error = function(e) {
-            # Catch file reading errors
-            stop(paste("Error reading CSV file:", e$message))
+            # Display error message to the user
+            showNotification(paste("Error reading file or processing data:", e$message), type = "error", duration = NULL)
+            return(NULL) # Return NULL on error
         })
-        
-        df
     })
     
-    # Output: Data preview table (for Upload tab)
-    output$contents <- renderDT({
-        datatable(raw_data(), options = list(pageLength = 10))
-    })
-    
-    # Dynamic UI for X coordinate selection
-    output$x_coord_select <- renderUI({
-        df <- raw_data()
-        req(df)
-        coords_cols <- names(df)[sapply(df, is.numeric)]
-        selectInput("x_coord_col", "Select X (Longitude/Easting) Coordinate Column:",
-                    choices = coords_cols,
-                    selected = grep("lon|long|x_coord|easting", coords_cols, ignore.case = TRUE, value = TRUE)[1])
-    })
-    
-    # Dynamic UI for Y coordinate selection
-    output$y_coord_select <- renderUI({
-        df <- raw_data()
-        req(df)
-        coords_cols <- names(df)[sapply(df, is.numeric)]
-        selectInput("y_coord_col", "Select Y (Latitude/Northing) Coordinate Column:",
-                    choices = coords_cols,
-                    selected = grep("lat|y_coord|northing", coords_cols, ignore.case = TRUE, value = TRUE)[1])
-    })
-    
-    # Dynamic UI for variable to color by
-    output$color_var_select <- renderUI({
-        df <- raw_data()
-        req(df) # Only require 'df' to be available for this UI.
-        
-        numeric_cols <- names(df)[sapply(df, is.numeric)]
-        
-        # Exclude selected coordinate columns if they are available
-        exclude_cols <- c()
-        if (!is.null(input$x_coord_col) && input$x_coord_col != "") {
-            exclude_cols <- c(exclude_cols, input$x_coord_col)
-        }
-        if (!is.null(input$y_coord_col) && input$y_coord_col != "") {
-            exclude_cols <- c(exclude_cols, input$y_coord_col)
-        }
-        
-        variable_cols <- numeric_cols[!numeric_cols %in% exclude_cols]
-        
-        if (length(variable_cols) == 0) {
-            tagList(
-                selectInput("color_var", "Variable to Color Points By:", choices = c("None" = ""), selected = ""),
-                helpText("No numeric variables available for coloring.")
-            )
+    # Update slider ranges based on uploaded data
+    observe({
+        points <- data_points()
+        if (!is.null(points) && nrow(points) > 0) {
+            # Get the actual min/max for the uploaded data
+            min_lon_data <- floor(min(points[[input$lon_col]]))
+            max_lon_data <- ceiling(max(points[[input$lon_col]]))
+            min_lat_data <- floor(min(points[[input$lat_col]]))
+            max_lat_data <- ceiling(max(points[[input$lat_col]]))
+            
+            # Update sliders with data-driven ranges, ensuring they stay within global bounds
+            updateSliderInput(session, "min_lon", value = max(min_lon_data - 5, -180),
+                              min = -180, max = max_lon_data + 5) # Adjust max to allow going beyond data
+            updateSliderInput(session, "max_lon", value = min(max_lon_data + 5, 180),
+                              min = min_lon_data - 5, max = 180) # Adjust min to allow going beyond data
+            updateSliderInput(session, "min_lat", value = max(min_lat_data - 5, -90),
+                              min = -90, max = max_lat_data + 5) # Adjust max to allow going beyond data
+            updateSliderInput(session, "max_lat", value = min(max_lat_data + 5, 90),
+                              min = min_lat_data - 5, max = 90) # Adjust min to allow going beyond data
         } else {
-            selectInput("color_var", "Variable to Color Points By:",
-                        choices = c("None" = "", variable_cols),
-                        selected = {
-                            # Try to pre-select a relevant variable, if available
-                            grep_result <- grep("yield|ph|om|nitrogen", variable_cols, ignore.case = TRUE, value = TRUE)
-                            if (length(grep_result) > 0) grep_result[1] else "" # Select the first match, or "None"
-                        }
-            )
+            # Reset to global ranges if no data or invalid data
+            updateSliderInput(session, "min_lon", value = -180, min = -180, max = 180)
+            updateSliderInput(session, "max_lon", value = 180, min = -180, max = 180)
+            updateSliderInput(session, "min_lat", value = -90, min = -90, max = 90)
+            updateSliderInput(session, "max_lat", value = 90, min = -90, max = 90)
         }
     })
     
-    # Observe button click to switch tab
-    observeEvent(input$load_data_btn, {
-        updateTabItems(session, "sidebarMenu", selected = "map_explorer")
+    
+    # Render the interactive Leaflet map
+    output$interactiveMap <- renderLeaflet({
+        points <- data_points()
+        req(points) # Ensure data is available
+        
+        leaflet() %>%
+            addTiles() %>% # Add default OpenStreetMap tiles
+            addMarkers(data = points,
+                       lng = ~get(input$lon_col), # Use the specified longitude column
+                       lat = ~get(input$lat_col),  # Use the specified latitude column
+                       popup = ~paste("Lat:", get(input$lat_col), "<br>Lon:", get(input$lon_col))) %>%
+            # Zoom to fit all markers
+            fitBounds(min(points[[input$lon_col]]), min(points[[input$lat_col]]),
+                      max(points[[input$lon_col]]), max(points[[input$lat_col]]))
     })
     
-    # Reactive: Convert data to sf object for mapping, triggered by update_map_btn
-    spatial_points_sf <- eventReactive(input$update_map_btn, {
+    # Reactive expression to generate the static plot
+    static_plot <- reactive({
+        points <- data_points()
+        req(points) # Ensure data is available
         
-        # Ensure all necessary inputs are available before proceeding
-        validate(
-            need(raw_data(), "No data uploaded yet."),
-            need(input$x_coord_col, "Please select the X coordinate column."),
-            need(input$y_coord_col, "Please select the Y coordinate column.")
-        )
+        # Get world map data (countries)
+        world <- ne_countries(scale = "medium", returnclass = "sf")
+        # Removed the ne_states line to avoid rnaturalearthhires dependency issues.
+        # states <- ne_states(country = NULL, returnclass = "sf")
         
-        df <- raw_data() 
-        
-        # Determine input CRS from user selection
-        input_crs_code <- if (input$input_crs_epsg == "") {
-            validate(
-                need(input$manual_input_crs, "Please enter a custom EPSG code or select a predefined one.")
-            )
-            as.numeric(input$manual_input_crs)
-        } else {
-            as.numeric(input$input_crs_epsg)
-        }
-        
-        # Validate coordinate columns exist and are numeric
-        if (!all(c(input$x_coord_col, input$y_coord_col) %in% names(df))) {
-            stop("Selected X or Y coordinate column not found in data. Please check data columns.")
-        }
-        
-        # Check if coordinates are truly numeric. If not, try coercing, then check.
-        # This handles cases where numbers might be read as characters due to locale or formatting.
-        if (!is.numeric(df[[input$x_coord_col]])) {
-            df[[input$x_coord_col]] <- suppressWarnings(as.numeric(gsub(",", "", df[[input$x_coord_col]]))) # Handle commas as thousands separators
-            if(any(is.na(df[[input$x_coord_col]]))) warning("X coordinate column contains non-numeric values that could not be coerced to numbers.")
-        }
-        if (!is.numeric(df[[input$y_coord_col]])) {
-            df[[input$y_coord_col]] <- suppressWarnings(as.numeric(gsub(",", "", df[[input$y_coord_col]]))) # Handle commas as thousands separators
-            if(any(is.na(df[[input$y_coord_col]]))) warning("Y coordinate column contains non-numeric values that could not be coerced to numbers.")
-        }
-        
-        # Remove rows with NA coordinates BEFORE creating sf object
-        df_clean <- df %>%
-            filter(!is.na(!!sym(input$x_coord_col)) & !is.na(!!sym(input$y_coord_col)))
-        
-        validate(
-            need(nrow(df_clean) > 0, "No valid data points found after cleaning (missing coordinates).")
-        )
-        
-        # Create sf object
-        sf_obj <- tryCatch({
-            st_as_sf(df_clean, coords = c(input$x_coord_col, input$y_coord_col), crs = input_crs_code)
-        }, error = function(e) {
-            stop(paste("Error creating spatial points (st_as_sf): ", e$message, ". Check X/Y columns or Input CRS. Common issues: non-numeric coordinates, incorrect EPSG code.", sep=""))
-        })
-        
-        # Leaflet always expects WGS84 (EPSG:4326) for adding markers and base layers.
-        # If the input data is in a projected CRS (e.g., UTM), it must be transformed to WGS84 for Leaflet.
-        if (st_crs(sf_obj)$epsg != 4326) {
-            sf_obj <- tryCatch({
-                st_transform(sf_obj, crs = 4326)
-            }, error = function(e) {
-                stop(paste("Error transforming data to WGS84 for map display: ", e$message, ". Ensure PROJ data is available or check input CRS.", sep=""))
-            })
-        }
-        
-        # Validate transformed coordinates
-        coords_wgs84 <- st_coordinates(sf_obj)
-        if (any(coords_wgs84[,2] < -90) || any(coords_wgs84[,2] > 90) || any(coords_wgs84[,1] < -180) || any(coords_wgs84[,1] > 180)) {
-            stop("Transformed coordinates are outside valid Lat/Lon range. Please double-check your input data and selected CRS.")
-        }
-        
-        sf_obj
-    })
-    
-    # Reactive: Calculate the geographic center of the data for map centering
-    center_map_coords <- reactive({
-        sf_obj <- spatial_points_sf() # Depend on the *processed* spatial data
-        if (is.null(sf_obj) || nrow(sf_obj) == 0) {
-            return(NULL)
-        }
-        
-        coords <- st_coordinates(sf_obj)
-        
-        # Ensure coordinates are in WGS84 (Lat/Lon) before calculating mean
-        mean_lon <- mean(coords[, 1], na.rm = TRUE)
-        mean_lat <- mean(coords[, 2], na.rm = TRUE)
-        
-        # Validate the calculated means
-        if (is.nan(mean_lon) || is.nan(mean_lat) || abs(mean_lat) > 90 || abs(mean_lon) > 180) {
-            warning("Calculated center coordinates are invalid (NaN or outside geographic bounds). Using default center.")
-            return(NULL)
-        }
-        list(lon = mean_lon, lat = mean_lat)
-    })
-    
-    # Reactive: Generate the Leaflet map object (used for both display and download)
-    final_map_object <- reactive({
-        # Only proceed if spatial_points_sf is not empty
-        validate(
-            need(spatial_points_sf(), "Please upload data and click 'Update Map' to view points."),
-            need(nrow(spatial_points_sf()) > 0, "No valid data points to display on the map after processing.")
-        )
-        
-        sf_data <- spatial_points_sf()
-        map_center <- center_map_coords()
-        
-        # Determine coloring scheme for map display
-        color_by_var <- input$color_var 
-        pal <- NULL
-        colors <- "red" # Changed default color to red for visibility
-        
-        if (color_by_var != "" && color_by_var %in% names(sf_data) && is.numeric(sf_data[[color_by_var]])) {
-            pal <- colorNumeric("viridis", domain = sf_data[[color_by_var]], na.color = "transparent")
-            colors <- pal(sf_data[[color_by_var]])
-            colors[is.na(colors)] <- "#808080" # Grey for NA values
-        }
-        
-        # Generate popups for the live app display
-        popups_html_live_app <- lapply(seq_len(nrow(sf_data)), function(i) {
-            generate_popup_html(sf_data[i, ]) # Use the helper function
-        })
-        
-        m <- leaflet() %>%
-            addProviderTiles(providers$OpenStreetMap, group = "OpenStreetMap") %>%
-            addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
-            addScaleBar(position = "bottomleft") %>%
-            addLayersControl(
-                baseGroups = c("OpenStreetMap", "Satellite"),
-                options = layersControlOptions(collapsed = FALSE)
-            ) 
-        
-        # Set initial view
-        if (!is.null(map_center)) {
-            m <- m %>% setView(lng = map_center$lon, lat = map_center$lat, zoom = 10) # Zoom for regional view
-        } else {
-            # Default to a general Caraga Region center if no data or invalid coords
-            m <- m %>% setView(lng = 125.54, lat = 8.94, zoom = 9) # Butuan City/Caraga Region
-        }
-        
-        # Add markers with popups for the live app
-        m <- m %>%
-            addCircleMarkers(
-                data = sf_data,
-                radius = 7, # Increased radius for visibility
-                color = colors, # Use dynamic colors for display in the app (now red default)
-                stroke = TRUE,
-                fillOpacity = 0.8,
-                popup = popups_html_live_app, # Add popups to live app
-                group = "Data Points" 
+        # Create the ggplot
+        p <- ggplot() +
+            geom_sf(data = world, fill = "lightgray", color = "darkgray", linewidth = 0.5) + # Country boundaries
+            # Removed the geom_sf layer for regional boundaries to avoid rnaturalearthhires dependency issues.
+            # geom_sf(data = states, fill = NA, color = "darkblue", linewidth = 0.3, linetype = "dotted") + # Regional boundaries
+            geom_point(data = points,
+                       aes_string(x = input$lon_col, y = input$lat_col), # Use aes_string for dynamic column names
+                       color = "red", size = input$point_size, alpha = 0.7) + # Plot points
+            # Apply bounding box from sliders
+            coord_sf(xlim = c(input$min_lon, input$max_lon),
+                     ylim = c(input$min_lat, input$max_lat),
+                     crs = 4326) + # Set coordinate system to WGS84 (latitude/longitude)
+            labs(title = "Coordinate Plot with Country Boundaries", # Updated title
+                 x = "Longitude",
+                 y = "Latitude") +
+            theme_minimal() +
+            theme(
+                plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+                axis.title = element_text(size = 12),
+                axis.text = element_text(size = 10),
+                panel.grid.major = element_line(color = "lightgray", linetype = "dashed"),
+                panel.background = element_rect(fill = "aliceblue", color = NA),
+                plot.margin = unit(c(1, 1, 1, 1), "cm") # Add some margin around the plot
             )
         
-        # Add legend if coloring by a variable for app display
-        if (!is.null(pal)) {
-            m <- m %>% addLegend(pal = pal, values = sf_data[[color_by_var]], title = color_by_var, position = "bottomright")
-        }
-        
-        m
+        p
     })
     
-    # Output: Interactive Map (for display in the app)
-    output$map_viewer <- renderLeaflet({
-        final_map_object() # Use the reactive map object
+    # Render the static plot preview
+    output$staticPlotPreview <- renderPlot({
+        static_plot()
     })
     
-    # Download Handler: Save the map as HTML
-    output$download_map <- downloadHandler(
+    # Download handler for the static plot
+    output$downloadPlot <- downloadHandler(
         filename = function() {
-            paste0("caraga_interactive_map_", Sys.Date(), ".html")
+            paste("coordinate_plot-", Sys.Date(), ".png", sep = "")
         },
         content = function(file) {
-            
-            sf_data_download <- spatial_points_sf()
-            map_center_download <- center_map_coords()
-            
-            # Reuse the coloring logic from the main map display for the downloaded map
-            color_by_var_download <- input$color_var # This will capture the variable selected in the app
-            pal_download <- NULL
-            colors_download <- "red" # Default if no variable selected or not numeric (now red)
-            
-            if (color_by_var_download != "" && color_by_var_download %in% names(sf_data_download) && is.numeric(sf_data_download[[color_by_var_download]])) {
-                pal_download <- colorNumeric("viridis", domain = sf_data_download[[color_by_var_download]], na.color = "transparent")
-                colors_download <- pal_download(sf_data_download[[color_by_var_download]])
-                colors_download[is.na(colors_download)] <- "#808080" # Grey for NA values
-            }
-            
-            # Generate popups for the downloaded HTML map
-            popups_html_download <- lapply(seq_len(nrow(sf_data_download)), function(i) {
-                generate_popup_html(sf_data_download[i, ]) # Use the helper function
-            })
-            
-            m_download <- leaflet() %>%
-                addProviderTiles(providers$OpenStreetMap, group = "OpenStreetMap") %>%
-                addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
-                addScaleBar(position = "bottomleft") %>%
-                addLayersControl(
-                    baseGroups = c("OpenStreetMap", "Satellite"),
-                    options = layersControlOptions(collapsed = FALSE)
-                ) 
-            
-            if (!is.null(map_center_download)) {
-                m_download <- m_download %>% setView(lng = map_center_download$lon, lat = map_center_download$lat, zoom = 10)
-            } else {
-                m_download <- m_download %>% setView(lng = 125.54, lat = 8.94, zoom = 9) # Default to Butuan City/Caraga Region
-            }
-            
-            # Add markers with popups for the downloaded map
-            m_download <- m_download %>%
-                addCircleMarkers(
-                    data = sf_data_download,
-                    radius = 7, # Increased radius for visibility
-                    color = colors_download, # Use the dynamic colors from the app's current state (now red)
-                    stroke = TRUE,
-                    fillOpacity = 0.8,
-                    popup = popups_html_download, # Add popups to downloaded map
-                    group = "Data Points" 
-                )
-            
-            # Add legend to the downloaded map if coloring by a variable
-            if (!is.null(pal_download)) {
-                m_download <- m_download %>% addLegend(pal = pal_download, values = sf_data_download[[color_by_var_download]], title = color_by_var_download, position = "bottomright")
-            }
-            
-            htmlwidgets::saveWidget(m_download, file, selfcontained = TRUE)
+            # Save the plot as PNG
+            ggsave(file, plot = static_plot(), device = "png", width = 10, height = 8, units = "in", dpi = 300)
         }
     )
-    
-    # Output: Raw data table
-    output$raw_data_table <- renderDT({
-        req(raw_data())
-        datatable(raw_data(), options = list(pageLength = 10))
-    })
 }
 
 # Run the application

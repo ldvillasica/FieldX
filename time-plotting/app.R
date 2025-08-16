@@ -56,8 +56,8 @@ ui <- fluidPage(
             # Dropdown to select the column to be used as the date variable
             uiOutput("dateColumnSelect"),
             
-            # Dropdown to select the date format
-            selectInput("dateFormat", "Select Date Format:",
+            # Dropdown to select the date format for parsing (this will also drive tick labels)
+            selectInput("dateFormat", "Select Data's Date Format:",
                         choices = c("YYYY-MM-DD" = "%Y-%m-%d",
                                     "MM/DD/YYYY" = "%m/%d/%Y",
                                     "DD-MM-YYYY" = "%d-%m-%Y",
@@ -69,8 +69,35 @@ ui <- fluidPage(
             # 'multiple = TRUE' allows selection of multiple variables
             uiOutput("valueColumnSelect"),
             
-            # NEW: Dropdown to select a categorical variable for faceting
-            uiOutput("facetColumnSelect"),
+            # Dropdown to select a categorical variable for faceting or coloring
+            uiOutput("categoryColumnSelect"),
+            
+            # Radio buttons to choose between faceting, coloring, or neither
+            radioButtons("plot_option", "Plot by:",
+                         choices = c("No Faceting / Color by Category" = "color",
+                                     "Facet by Category" = "facet",
+                                     "No Category" = "none"),
+                         selected = "none"),
+            
+            # Horizontal line for visual separation
+            tags$hr(),
+            
+            # Text inputs for X and Y axis labels
+            textInput("xlab_text", "X-axis Label (optional):", value = ""),
+            textInput("ylab_text", "Y-axis Label (optional):", value = ""),
+            
+            # Select input for X-axis major break interval
+            selectInput("x_axis_major_breaks", "X-axis Major Tick Interval:",
+                        choices = c("Auto" = "auto",
+                                    "1 Day" = "1 day",
+                                    "1 Week" = "1 week",
+                                    "1 Month" = "1 month",
+                                    "3 Months" = "3 months",
+                                    "6 Months" = "6 months",
+                                    "1 Year" = "1 year",
+                                    "2 Years" = "2 years",
+                                    "5 Years" = "5 years"),
+                        selected = "auto"),
             
             # Horizontal line for visual separation
             tags$hr(),
@@ -122,19 +149,17 @@ server <- function(input, output, session) {
         selectInput("valueCols", "Select Value Column(s):", choices = numeric_cols, multiple = TRUE)
     })
     
-    # NEW: Render UI for selecting the facet column
-    output$facetColumnSelect <- renderUI({
+    # Render UI for selecting the category column (for faceting or coloring)
+    output$categoryColumnSelect <- renderUI({
         df <- data_input()
-        # Get column names that are non-numeric (potential categorical variables)
-        # Exclude the selected date column from this list
+        # Get column names that are not numeric (potential categorical variables)
         non_numeric_cols <- names(df)[sapply(df, function(x) !is.numeric(x))]
+        
         # Filter out the selected date column to avoid self-selection
         if (!is.null(input$dateCol)) {
             non_numeric_cols <- non_numeric_cols[non_numeric_cols != input$dateCol]
         }
-        # Add an option for "None" to allow no faceting
-        choices <- c("None" = "", non_numeric_cols)
-        selectInput("facetCol", "Select Faceting Variable (Categorical):", choices = choices)
+        selectInput("categoryCol", "Select Categorical Variable:", choices = non_numeric_cols, selected = NULL)
     })
     
     # Reactive expression to prepare the data for plotting
@@ -151,38 +176,39 @@ server <- function(input, output, session) {
         
         # Parse the 'Date' column based on the selected format
         if (input$dateFormat == "year_only") {
-            # For 'Year Only', construct a date string asYYYY-01-01 and then parse
+            # For 'Year Only', construct a date string as `%Y-01-01` and then parse
             df_plot$Date <- as.Date(paste0(df_plot$Date, "-01-01"), format = "%Y-%m-%d")
         } else {
             # For other formats, use the specified format directly
             df_plot$Date <- as.Date(df_plot$Date, format = input$dateFormat)
         }
         
-        # Select columns: Date, chosen value columns, and the facet column if selected
+        # Select columns: Date, chosen value columns, and the category column if selected and a valid plot option
         cols_to_select <- c("Date", input$valueCols)
-        if (!is.null(input$facetCol) && input$facetCol != "") {
-            cols_to_select <- c(cols_to_select, input$facetCol)
+        # Only include category column if it's selected AND we're using it for plotting
+        if (!is.null(input$categoryCol) && input$categoryCol != "" && input$plot_option != "none") {
+            cols_to_select <- c(cols_to_select, input$categoryCol)
         }
         
-        # FIX: Using base R's bracket notation for column selection to avoid dplyr::select issues
+        # Using base R's bracket notation for column selection to avoid dplyr::select issues
         # This is more robust against potential dplyr versioning/conflict problems
         df_plot <- df_plot[, cols_to_select, drop = FALSE] %>%
             filter(!is.na(Date)) # Filter out rows where Date parsing failed
         
         # Pivot the data from wide to long format for plotting multiple variables
-        # If a facet column is selected, ensure it's kept in the pivot
-        if (!is.null(input$facetCol) && input$facetCol != "") {
+        # If a category column is selected, ensure it's kept in the pivot
+        if (!is.null(input$categoryCol) && input$categoryCol != "" && input$plot_option != "none") {
             df_plot <- df_plot %>%
-                pivot_longer(cols = -c(Date, !!sym(input$facetCol)), names_to = "Variable", values_to = "Value")
+                pivot_longer(cols = -c(Date, !!sym(input$categoryCol)), names_to = "Variable", values_to = "Value")
         } else {
             df_plot <- df_plot %>%
                 pivot_longer(cols = -Date, names_to = "Variable", values_to = "Value")
         }
         
-        # Aggregate data to ensure one value per date, variable (and facet category) for smooth lines
-        if (!is.null(input$facetCol) && input$facetCol != "") {
+        # Aggregate data to ensure one value per date, variable (and category) for smooth lines
+        if (!is.null(input$categoryCol) && input$categoryCol != "" && input$plot_option != "none") {
             df_plot <- df_plot %>%
-                group_by(Date, Variable, !!sym(input$facetCol)) %>%
+                group_by(Date, Variable, !!sym(input$categoryCol)) %>%
                 summarize(Value = mean(Value, na.rm = TRUE), .groups = 'drop')
         } else {
             df_plot <- df_plot %>%
@@ -242,23 +268,75 @@ server <- function(input, output, session) {
             "Time Series of Selected Variables"
         }
         
-        # Create the ggplot object for line graphs with multiple variables
-        p <- ggplot(df_plot, aes(x = Date, y = Value, color = Variable)) + # Map 'Variable' to color for multiple lines
-            geom_line(size = 0.8) + # Only line graph, removed geom_point
+        # Determine x-axis label - now NULL if user input is empty
+        x_label <- if (input$xlab_text != "") {
+            input$xlab_text
+        } else {
+            NULL # No default label if user doesn't provide one
+        }
+        
+        # Determine y-axis label - now NULL if user input is empty
+        y_label <- if (input$ylab_text != "") {
+            input$ylab_text
+        } else {
+            NULL # No default label if user doesn't provide one
+        }
+        
+        # Determine the x-axis tick label format based on input$dateFormat
+        # Handle "year_only" specifically
+        x_tick_label_format <- if (input$dateFormat == "year_only") {
+            "%Y" # Just year for the tick labels if data was year-only
+        } else {
+            input$dateFormat # Use the same format as the input data
+        }
+        
+        # Determine major date breaks based on user input
+        major_breaks_arg <- if (input$x_axis_major_breaks == "auto") {
+            waiver() # ggplot2's default auto-breaks
+        } else {
+            input$x_axis_major_breaks # User-defined interval
+        }
+        
+        # Base ggplot object for line graphs
+        p <- ggplot(df_plot, aes(x = Date, y = Value)) +
+            geom_line(size = 0.8) +
             labs(title = plot_title,
-                 x = "Year",
-                 y = "Score") + # Y-axis label becomes "Value" as it represents multiple variables
-            theme_minimal() + # Minimal theme for clean look
+                 x = x_label, # Use dynamic x-label (can be NULL)
+                 y = y_label) + # Use dynamic y-label (can be NULL)
+            theme_minimal() +
             theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 18),
                   axis.title = element_text(size = 14),
                   axis.text = element_text(size = 12),
-                  legend.position = "bottom") + # Position legend at the bottom for clarity
-            # Explicitly set x-axis breaks to show yearly labels
-            scale_x_date(date_breaks = "1 year", date_labels = "%Y")
+                  legend.position = "bottom",
+                  panel.grid.major.x = element_line(color = "grey80", linetype = "dotted"),
+                  panel.grid.minor.x = element_blank()
+            ) +
+            scale_x_date(date_breaks = major_breaks_arg,
+                         date_labels = x_tick_label_format,
+                         minor_breaks = "1 month")
         
-        # Add faceting if a facet column is selected
-        if (!is.null(input$facetCol) && input$facetCol != "") {
-            p <- p + facet_wrap(as.formula(paste("~", input$facetCol)), scales = "free_y") # Use free_y for independent y-axes per facet
+        
+        # Apply plotting options based on user selection
+        if (!is.null(input$categoryCol) && input$categoryCol != "") {
+            if (input$plot_option == "facet") {
+                p <- p + facet_wrap(as.formula(paste("~", input$categoryCol)), scales = "free_y") +
+                    aes(color = Variable) # Color by Variable within facets
+            } else if (input$plot_option == "color") {
+                # Logic for legend simplification based on number of value columns:
+                if (length(input$valueCols) == 1) {
+                    # If only one value column, color directly by the category variable
+                    p <- p + aes(color = !!sym(input$categoryCol)) +
+                        labs(color = input$categoryCol) # Set legend title to category name
+                } else {
+                    # If multiple value columns, revert to coloring by combination for clarity
+                    p <- p + aes(color = interaction(Variable, !!sym(input$categoryCol))) +
+                        labs(color = paste("Variable &", input$categoryCol))
+                }
+            } else { # plot_option == "none"
+                p <- p + aes(color = Variable) # Default to coloring by Variable
+            }
+        } else { # No category column selected or plot_option is "none"
+            p <- p + aes(color = Variable) # Default to coloring by Variable
         }
         
         # Convert ggplot to an interactive plotly object

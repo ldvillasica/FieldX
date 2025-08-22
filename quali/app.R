@@ -15,75 +15,75 @@ ui <- fluidPage(
         tags$meta(name="viewport", content="width=device-width, initial-scale=1.0"), 
         # Custom CSS for better aesthetics and responsiveness 
         tags$style(HTML(" 
-       body { 
-         font-family: 'Inter', sans-serif; 
-         background-color: #f0f2f5; 
-         color: #333; 
-         padding: 20px; 
-       } 
-       .container-fluid { 
-         max-width: 1200px; 
-         margin: auto; 
-         background-color: #ffffff; 
-         border-radius: 12px; 
-         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); 
-         padding: 30px; 
-       } 
-       h1 { 
-         color: #2c3e50; 
-         text-align: center; 
-         margin-bottom: 30px; 
-         font-weight: 700; 
-       } 
-       .well { 
-         background-color: #ecf0f1; 
-         border: 1px solid #bdc3c7; 
-         border-radius: 8px; 
-         padding: 20px; 
-         margin-bottom: 20px; 
-       } 
-       .form-group label { 
-         font-weight: 600; 
-         margin-bottom: 8px; 
-         display: block; 
-       } 
-       .form-control { 
-         border-radius: 6px; 
-         border: 1px solid #ced4da; 
-         padding: 10px 15px; 
-         box-shadow: inset 0 1px 2px rgba(0,0,0,.075); 
-       } 
-       .btn-primary { 
-         background-color: #3498db; 
-         border-color: #3498db; 
-         border-radius: 8px; 
-         padding: 10px 20px; 
-         font-weight: 600; 
-         transition: background-color 0.3s ease, border-color 0.3s ease; 
-       } 
-       .btn-primary:hover { 
-         background-color: #2980b9; 
-         border-color: #2980b9; 
-       } 
-       .shiny-plot-output { 
-         border: 1px solid #e0e0e0; 
-         border-radius: 8px; 
-         overflow: hidden; 
-         background-color: #fdfdfd; 
-       } 
-       .col-sm-4, .col-sm-8 { 
-         padding: 15px; /* Add padding for better spacing on smaller screens */ 
-       } 
-       @media (max-width: 768px) { 
-         .col-sm-4, .col-sm-8 { 
-           width: 100%; 
-           float: none; 
-         } 
-         .container-fluid { 
-           padding: 15px; 
-         } 
-       } 
-     ")) 
+      body { 
+        font-family: 'Inter', sans-serif; 
+        background-color: #f0f2f5; 
+        color: #333; 
+        padding: 20px; 
+      } 
+      .container-fluid { 
+        max-width: 1200px; 
+        margin: auto; 
+        background-color: #ffffff; 
+        border-radius: 12px; 
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); 
+        padding: 30px; 
+      } 
+      h1 { 
+        color: #2c3e50; 
+        text-align: center; 
+        margin-bottom: 30px; 
+        font-weight: 700; 
+      } 
+      .well { 
+        background-color: #ecf0f1; 
+        border: 1px solid #bdc3c7; 
+        border-radius: 8px; 
+        padding: 20px; 
+        margin-bottom: 20px; 
+      } 
+      .form-group label { 
+        font-weight: 600; 
+        margin-bottom: 8px; 
+        display: block; 
+      } 
+      .form-control { 
+        border-radius: 6px; 
+        border: 1px solid #ced4da; 
+        padding: 10px 15px; 
+        box-shadow: inset 0 1px 2px rgba(0,0,0,.075); 
+      } 
+      .btn-primary { 
+        background-color: #3498db; 
+        border-color: #3498db; 
+        border-radius: 8px; 
+        padding: 10px 20px; 
+        font-weight: 600; 
+        transition: background-color 0.3s ease, border-color 0.3s ease; 
+      } 
+      .btn-primary:hover { 
+        background-color: #2980b9; 
+        border-color: #2980b9; 
+      } 
+      .shiny-plot-output { 
+        border: 1px solid #e0e0e0; 
+        border-radius: 8px; 
+        overflow: hidden; 
+        background-color: #fdfdfd; 
+      } 
+      .col-sm-4, .col-sm-8 { 
+        padding: 15px; /* Add padding for better spacing on smaller screens */ 
+      } 
+      @media (max-width: 768px) { 
+        .col-sm-4, .col-sm-8 { 
+          width: 100%; 
+          float: none; 
+        } 
+        .container-fluid { 
+          padding: 15px; 
+        } 
+      } 
+    ")) 
     ), 
     
     titlePanel("Faceted Plot Generator for Multiple Variables"), 
@@ -307,7 +307,7 @@ server <- function(input, output, session) {
                     axis.text.x = element_text(size = 10, angle = 45, hjust = 1), 
                     strip.text = element_text(size = 12, face = "bold", color = "white"), 
                     strip.background = element_rect(fill = "#2c3e50", color = NA), 
-                    panel.spacing = unit(1.5, "lines"), 
+                    panel.spacing = unit(2, "lines"), 
                     panel.grid.major.x = element_blank(), 
                     panel.grid.minor = element_blank(), 
                     legend.position = "bottom", 
@@ -329,7 +329,7 @@ server <- function(input, output, session) {
                     plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)), 
                     strip.text = element_text(size = 12, face = "bold", color = "white"), 
                     strip.background = element_rect(fill = "#2c3e50", color = NA), 
-                    panel.spacing = unit(1.5, "lines"), 
+                    panel.spacing = unit(2, "lines"), 
                     legend.position = "none" 
                 ) 
             
@@ -349,7 +349,7 @@ server <- function(input, output, session) {
                     plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)), 
                     strip.text = element_text(size = 12, face = "bold", color = "white"), 
                     strip.background = element_rect(fill = "#2c3e50", color = NA), 
-                    panel.spacing = unit(1.5, "lines"), 
+                    panel.spacing = unit(2, "lines"), 
                     legend.position = "bottom" 
                 ) 
             

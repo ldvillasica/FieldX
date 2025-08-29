@@ -12,6 +12,7 @@ library(stringr) # For string manipulation
 library(DT)    # For interactive data tables
 library(ggrepel) # For non-overlapping text labels
 library(RColorBrewer) # For color palettes
+library(scales) # For percent labels on y-axis
 
 # Define UI for the dashboard
 ui <- dashboardPage(
@@ -37,6 +38,17 @@ ui <- dashboardPage(
     tags$hr(),
     uiOutput("plot_mode_selector"),
     uiOutput("bar_orientation_selector"), # New input for bar plot orientation
+    tags$hr(),
+    # New color theme selector
+    selectInput("color_theme", "Select Color Theme:",
+                choices = c(
+                  "Green" = "green",
+                  "Red" = "red",
+                  "Yellow" = "yellow",
+                  "Blue" = "blue",
+                  "Orange" = "orange",
+                  "Gray" = "gray"
+                )),
     tags$hr(),
     helpText("Upload a CSV file and select your variables and plot type. Density plots and Pie Charts do not use the 'Categorical Variable' selection.")
   ),
@@ -343,6 +355,7 @@ server <- function(input, output, session) {
       }
       
       if (input$bar_plot_mode == "percentage") {
+        # Recalculate percentages for the 100% stacked bar chart
         df_summary <- df_summary %>%
           group_by(Variable) %>%
           mutate(Value_for_Plot = (Value_for_Plot / sum(Value_for_Plot, na.rm = TRUE)) * 100) %>%
@@ -351,6 +364,20 @@ server <- function(input, output, session) {
       
       return(list(data = df_summary, type = input$bar_plot_mode))
     }
+  })
+  
+  # Reactive expression to get the selected color palette
+  selected_colors <- reactive({
+    color_palettes <- list(
+      "red" = c("#ED1E26", "#d91b23", "#c61820", "#b3151b", "#a01216"),
+      "green" = c("#236130", "#4C9F38", "#2c723d", "#36884a", "#2e7b41"),
+      "yellow" = c("#FFD700", "#FFC400", "#FFB100", "#FF9E00", "#FF8B00"), # Using a yellow gradient
+      "gray" = c("#A8A8A8", "#949494", "#808080", "#6b6b6b", "#575757"),
+      "blue" = c("#00689D", "#005681", "#004467", "#00324d", "#002033"),
+      "orange" = c("#FD6925", "#e45b1e", "#cc511a", "#b44715", "#9b3c10")
+    )
+    
+    color_palettes[[input$color_theme]]
   })
   
   # Render the main plot
@@ -385,41 +412,44 @@ server <- function(input, output, session) {
                         "frequency" = "Frequency",
                         "percentage" = "Percentage (%)")
       
-      # Determine plot orientation and set up aesthetics
+      cat_var_selected <- input$cat_var_col != "None" && input$cat_var_col %in% names(df_plot)
+      
       if (input$bar_orientation == "vertical") {
         # Vertical Plot
         p <- ggplot(df_plot, aes(y = Value_for_Plot))
-        cat_var_selected <- input$cat_var_col != "None" && input$cat_var_col %in% names(df_plot)
         
         if (input$bar_plot_mode == "mean") {
           if (cat_var_selected) {
-            p <- p + geom_bar(aes(x = !!sym(input$cat_var_col), fill = !!sym(input$cat_var_col)), stat = "identity") +
-              labs(x = input$cat_var_col, fill = input$cat_var_col)
+            p <- p + geom_bar(aes(x = !!sym(input$cat_var_col), fill = Variable), stat = "identity") +
+              labs(x = input$cat_var_col, fill = "Variable")
           } else {
-            p <- p + geom_bar(aes(x = Variable), stat = "identity", fill = "#3498db") +
+            p <- p + geom_bar(aes(x = Variable), stat = "identity", fill = selected_colors()[1]) +
               labs(x = NULL)
           }
-        } else {
+        } else if (input$bar_plot_mode == "percentage") {
           if (cat_var_selected) {
             p <- p + geom_bar(aes(x = !!sym(input$cat_var_col), fill = Value), stat = "identity") +
               labs(x = input$cat_var_col, fill = "Category") +
-              # Add text labels with a box for readability
-              geom_label(aes(x = !!sym(input$cat_var_col), label = if (input$bar_plot_mode == "percentage") {
-                sprintf("%.2f%%", Value_for_Plot)
-              } else {
-                Value_for_Plot
-              }),
-              position = position_stack(vjust = 0.5), size = 4, color = "black")
+              geom_label(aes(x = !!sym(input$cat_var_col), label = paste0(round(Value_for_Plot, 1), "%")),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
           } else {
-            p <- p + geom_bar(aes(x = Value, fill = Value), stat = "identity") +
+            p <- p + geom_bar(aes(x = Variable, fill = Value), stat = "identity") +
               labs(x = "Category", fill = "Category") +
-              # Add text labels with a box for readability
-              geom_label(aes(x = Value, label = if (input$bar_plot_mode == "percentage") {
-                sprintf("%.2f%%", Value_for_Plot)
-              } else {
-                Value_for_Plot
-              }),
-              position = position_stack(vjust = 0.5), size = 4, color = "black")
+              geom_label(aes(x = Variable, label = paste0(round(Value_for_Plot, 1), "%")),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
+          }
+          p <- p + scale_y_continuous(labels = function(x) paste0(x, "%"))
+        } else { # Frequency
+          if (cat_var_selected) {
+            p <- p + geom_bar(aes(x = !!sym(input$cat_var_col), fill = Value), stat = "identity") +
+              labs(x = input$cat_var_col, fill = "Category") +
+              geom_label(aes(x = !!sym(input$cat_var_col), label = Value_for_Plot),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
+          } else {
+            p <- p + geom_bar(aes(x = Variable, fill = Value), stat = "identity") +
+              labs(x = "Category", fill = "Category") +
+              geom_label(aes(x = Variable, label = Value_for_Plot),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
           }
         }
         
@@ -427,56 +457,42 @@ server <- function(input, output, session) {
           labs(
             title = paste("Faceted Bar Plots -", y_label),
             y = y_label
-          ) +
-          scale_fill_brewer(palette = "Set2") + # Use a professional color palette
-          theme_minimal() +
-          theme(
-            plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
-            axis.title.y = element_text(size = 14, margin = margin(r = 10)),
-            axis.text.y = element_text(size = 10),
-            axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
-            strip.text = element_text(size = 12, face = "bold", color = "white"),
-            strip.background = element_rect(fill = "#2c3e50", color = NA),
-            panel.spacing = unit(2, "lines"),
-            panel.grid.major.x = element_blank(),
-            panel.grid.minor = element_blank(),
-            legend.position = "bottom",
-            legend.title = element_text(size = 12, face = "bold"),
-            legend.text = element_text(size = 10)
           )
       } else { # Horizontal Plot
         p <- ggplot(df_plot, aes(x = Value_for_Plot)) # x and y are swapped here
-        cat_var_selected <- input$cat_var_col != "None" && input$cat_var_col %in% names(df_plot)
         
         if (input$bar_plot_mode == "mean") {
           if (cat_var_selected) {
-            p <- p + geom_bar(aes(y = !!sym(input$cat_var_col), fill = !!sym(input$cat_var_col)), stat = "identity") + # y and x swapped
-              labs(y = input$cat_var_col, fill = input$cat_var_col)
+            p <- p + geom_bar(aes(y = !!sym(input$cat_var_col), fill = Variable), stat = "identity") + # y and x swapped
+              labs(y = input$cat_var_col, fill = "Variable")
           } else {
-            p <- p + geom_bar(aes(y = Variable), stat = "identity", fill = "#3498db") + # y and x swapped
+            p <- p + geom_bar(aes(y = Variable), stat = "identity", fill = selected_colors()[1]) + # y and x swapped
               labs(y = NULL)
           }
-        } else {
+        } else if (input$bar_plot_mode == "percentage") {
+          if (cat_var_selected) {
+            p <- p + geom_bar(aes(y = !!sym(input$cat_var_col), fill = Value), stat = "identity") +
+              labs(y = input$cat_var_col, fill = "Category") +
+              geom_label(aes(y = !!sym(input$cat_var_col), label = paste0(round(Value_for_Plot, 1), "%")),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
+          } else {
+            p <- p + geom_bar(aes(y = Variable, fill = Value), stat = "identity") +
+              labs(y = "Category", fill = "Category") +
+              geom_label(aes(y = Variable, label = paste0(round(Value_for_Plot, 1), "%")),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
+          }
+          p <- p + scale_x_continuous(labels = function(x) paste0(x, "%"))
+        } else { # Frequency
           if (cat_var_selected) {
             p <- p + geom_bar(aes(y = !!sym(input$cat_var_col), fill = Value), stat = "identity") + # y and x swapped
               labs(y = input$cat_var_col, fill = "Category") +
-              # Add text labels with a box for readability
-              geom_label(aes(y = !!sym(input$cat_var_col), label = if (input$bar_plot_mode == "percentage") {
-                sprintf("%.2f%%", Value_for_Plot)
-              } else {
-                Value_for_Plot
-              }),
-              position = position_stack(vjust = 0.5), size = 4, color = "black")
+              geom_label(aes(y = !!sym(input$cat_var_col), label = Value_for_Plot),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
           } else {
             p <- p + geom_bar(aes(y = Value, fill = Value), stat = "identity") + # y and x swapped
               labs(y = "Category", fill = "Category") +
-              # Add text labels with a box for readability
-              geom_label(aes(y = Value, label = if (input$bar_plot_mode == "percentage") {
-                sprintf("%.2f%%", Value_for_Plot)
-              } else {
-                Value_for_Plot
-              }),
-              position = position_stack(vjust = 0.5), size = 4, color = "black")
+              geom_label(aes(y = Value, label = Value_for_Plot),
+                         position = position_stack(vjust = 0.5), size = 4, color = "black")
           }
         }
         
@@ -484,36 +500,40 @@ server <- function(input, output, session) {
           labs(
             title = paste("Faceted Bar Plots -", y_label),
             x = y_label # Swap labels
-          ) +
-          scale_fill_brewer(palette = "Set2") + # Use a professional color palette
-          theme_minimal() +
-          theme(
-            plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
-            axis.title.x = element_text(size = 14, margin = margin(r = 10)),
-            axis.text.x = element_text(size = 10),
-            axis.text.y = element_text(size = 10),
-            strip.text = element_text(size = 12, face = "bold", color = "white"),
-            strip.background = element_rect(fill = "#2c3e50", color = NA),
-            panel.spacing = unit(2, "lines"),
-            panel.grid.major.y = element_blank(),
-            panel.grid.minor = element_blank(),
-            legend.position = "bottom",
-            legend.title = element_text(size = 12, face = "bold"),
-            legend.text = element_text(size = 10)
           )
       }
+      
+      # Apply common theme and color scale
+      p <- p +
+        scale_fill_manual(values = selected_colors()) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
+          axis.title.y = element_text(size = 14, margin = margin(r = 10)),
+          axis.text.y = element_text(size = 10),
+          axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+          strip.text = element_text(size = 12, face = "bold", color = "white"),
+          strip.background = element_rect(fill = "#2c3e50", color = NA),
+          panel.spacing = unit(2, "lines"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.position = "bottom",
+          legend.title = element_text(size = 12, face = "bold"),
+          legend.text = element_text(size = 10)
+        )
       
       p
     } else if (input$plot_type == "density") {
       # DENSITY PLOT LOGIC
-      p <- ggplot(df_plot, aes(x = Value, fill = Variable)) +
-        geom_density(alpha = 0.6) +
+      p <- ggplot(df_plot, aes(x = Value)) +
+        geom_density(aes(fill = after_stat(x)), alpha = 0.6) +
         facet_wrap(~ Variable, scales = "free", ncol = 3, labeller = labeller(Variable = label_wrap_gen(width = 30))) +
         labs(
           title = "Faceted Density Plots",
           x = "Value",
           y = "Density"
         ) +
+        scale_fill_gradient(low = selected_colors()[1], high = selected_colors()[2]) +
         theme_minimal() +
         theme(
           plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
@@ -546,6 +566,7 @@ server <- function(input, output, session) {
           title = "Faceted Pie Charts - Counts and Percentages",
           fill = "Category"
         ) +
+        scale_fill_manual(values = selected_colors()) +
         theme_void() +
         theme(
           plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),

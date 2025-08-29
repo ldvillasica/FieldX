@@ -1,0 +1,12 @@
+name: quali
+title: quali
+username: ljdvillasica
+account: ljdvillasica
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15299292
+bundleId: 10835297
+url: https://ljdvillasica.shinyapps.io/quali/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

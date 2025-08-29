@@ -10,6 +10,8 @@ library(rlang) # For !!sym() to handle column names with spaces
 library(tidyr) # For pivot_longer to reshape data
 library(stringr) # For string manipulation
 library(DT)    # For interactive data tables
+library(ggrepel) # For non-overlapping text labels
+library(RColorBrewer) # For color palettes
 
 # Define UI for the dashboard
 ui <- dashboardPage(
@@ -226,8 +228,8 @@ server <- function(input, output, session) {
       return(NULL)
     }
     radioButtons("bar_plot_mode", "Select Bar Plot Mode:",
-                 choices = c("Quantitative (Mean)" = "mean", "Qualitative (Count)" = "count"),
-                 selected = "mean")
+                 choices = c("Quantitative (Mean)" = "mean", "Qualitative (Frequency)" = "frequency", "Qualitative (Percentage)" = "percentage"),
+                 selected = "frequency")
   })
   
   # New: Render UI for bar plot orientation
@@ -253,7 +255,7 @@ server <- function(input, output, session) {
       if (input$bar_plot_mode == "mean") {
         cols_to_select <- names(df)[sapply(df, is.numeric)]
         label_text <- "Select Quantitative Variables:"
-      } else { # bar_plot_mode == "count"
+      } else { # bar_plot_mode == "frequency" or "percentage"
         cols_to_select <- names(df)[!sapply(df, is.numeric)]
         label_text <- "Select Qualitative Variables:"
       }
@@ -317,7 +319,7 @@ server <- function(input, output, session) {
           summarise(Value_for_Plot = mean(Value, na.rm = TRUE), .groups = 'drop')
       }
       return(list(data = df_summary, type = "mean"))
-    } else { # bar_plot_mode == "count" or plot_type == "pie"
+    } else { # bar_plot_mode == "frequency" or "percentage" or plot_type == "pie"
       if (any(sapply(df[input$response_vars], is.numeric))) {
         showNotification("This plot type requires categorical variables. Please re-select.", type = "error")
         return(NULL)
@@ -329,6 +331,7 @@ server <- function(input, output, session) {
           values_to = "Value"
         )
       cat_var_selected <- input$cat_var_col != "None" && input$cat_var_col %in% names(df) && input$plot_type == "bar"
+      
       if (cat_var_selected) {
         df_summary <- df_long %>%
           group_by(!!sym(input$cat_var_col), Variable, Value) %>%
@@ -339,7 +342,14 @@ server <- function(input, output, session) {
           summarise(Value_for_Plot = n(), .groups = 'drop')
       }
       
-      return(list(data = df_summary, type = "count"))
+      if (input$bar_plot_mode == "percentage") {
+        df_summary <- df_summary %>%
+          group_by(Variable) %>%
+          mutate(Value_for_Plot = (Value_for_Plot / sum(Value_for_Plot, na.rm = TRUE)) * 100) %>%
+          ungroup()
+      }
+      
+      return(list(data = df_summary, type = input$bar_plot_mode))
     }
   })
   
@@ -370,7 +380,10 @@ server <- function(input, output, session) {
     
     if (input$plot_type == "bar") {
       # BAR PLOT LOGIC
-      y_label <- ifelse(input$bar_plot_mode == "mean", "Mean Value", "Count")
+      y_label <- switch(input$bar_plot_mode,
+                        "mean" = "Mean Value",
+                        "frequency" = "Frequency",
+                        "percentage" = "Percentage (%)")
       
       # Determine plot orientation and set up aesthetics
       if (input$bar_orientation == "vertical") {
@@ -389,10 +402,24 @@ server <- function(input, output, session) {
         } else {
           if (cat_var_selected) {
             p <- p + geom_bar(aes(x = !!sym(input$cat_var_col), fill = Value), stat = "identity") +
-              labs(x = input$cat_var_col, fill = "Category")
+              labs(x = input$cat_var_col, fill = "Category") +
+              # Add text labels with a box for readability
+              geom_label(aes(x = !!sym(input$cat_var_col), label = if (input$bar_plot_mode == "percentage") {
+                sprintf("%.2f%%", Value_for_Plot)
+              } else {
+                Value_for_Plot
+              }),
+              position = position_stack(vjust = 0.5), size = 4, color = "black")
           } else {
             p <- p + geom_bar(aes(x = Value, fill = Value), stat = "identity") +
-              labs(x = "Category", fill = "Category")
+              labs(x = "Category", fill = "Category") +
+              # Add text labels with a box for readability
+              geom_label(aes(x = Value, label = if (input$bar_plot_mode == "percentage") {
+                sprintf("%.2f%%", Value_for_Plot)
+              } else {
+                Value_for_Plot
+              }),
+              position = position_stack(vjust = 0.5), size = 4, color = "black")
           }
         }
         
@@ -401,6 +428,7 @@ server <- function(input, output, session) {
             title = paste("Faceted Bar Plots -", y_label),
             y = y_label
           ) +
+          scale_fill_brewer(palette = "Set2") + # Use a professional color palette
           theme_minimal() +
           theme(
             plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
@@ -431,10 +459,24 @@ server <- function(input, output, session) {
         } else {
           if (cat_var_selected) {
             p <- p + geom_bar(aes(y = !!sym(input$cat_var_col), fill = Value), stat = "identity") + # y and x swapped
-              labs(y = input$cat_var_col, fill = "Category")
+              labs(y = input$cat_var_col, fill = "Category") +
+              # Add text labels with a box for readability
+              geom_label(aes(y = !!sym(input$cat_var_col), label = if (input$bar_plot_mode == "percentage") {
+                sprintf("%.2f%%", Value_for_Plot)
+              } else {
+                Value_for_Plot
+              }),
+              position = position_stack(vjust = 0.5), size = 4, color = "black")
           } else {
             p <- p + geom_bar(aes(y = Value, fill = Value), stat = "identity") + # y and x swapped
-              labs(y = "Category", fill = "Category")
+              labs(y = "Category", fill = "Category") +
+              # Add text labels with a box for readability
+              geom_label(aes(y = Value, label = if (input$bar_plot_mode == "percentage") {
+                sprintf("%.2f%%", Value_for_Plot)
+              } else {
+                Value_for_Plot
+              }),
+              position = position_stack(vjust = 0.5), size = 4, color = "black")
           }
         }
         
@@ -443,6 +485,7 @@ server <- function(input, output, session) {
             title = paste("Faceted Bar Plots -", y_label),
             x = y_label # Swap labels
           ) +
+          scale_fill_brewer(palette = "Set2") + # Use a professional color palette
           theme_minimal() +
           theme(
             plot.title = element_text(hjust = 0.5, size = 18, face = "bold", margin = margin(b = 15)),
@@ -483,12 +526,24 @@ server <- function(input, output, session) {
       p
     } else if (input$plot_type == "pie") {
       # PIE CHART LOGIC
-      p <- ggplot(df_plot, aes(x = "", y = Value_for_Plot, fill = Value)) +
+      # Calculate percentages and label positions
+      df_plot_with_pct <- df_plot %>%
+        group_by(Variable) %>%
+        arrange(desc(Value)) %>% # Arrange to get better label positioning
+        mutate(
+          cum_sum = cumsum(Value_for_Plot),
+          label_position = cum_sum - Value_for_Plot / 2,
+          Percentage = (Value_for_Plot / sum(Value_for_Plot)) * 100,
+          Label = paste0(round(Percentage, 1), "%") # Only show percentage in label
+        ) %>%
+        ungroup()
+      
+      p <- ggplot(df_plot_with_pct, aes(x = "", y = Value_for_Plot, fill = Value)) +
         geom_bar(stat = "identity", width = 1) +
         coord_polar("y", start = 0) +
         facet_wrap(~ Variable, ncol = 3, labeller = labeller(Variable = label_wrap_gen(width = 30))) +
         labs(
-          title = "Faceted Pie Charts - Counts",
+          title = "Faceted Pie Charts - Counts and Percentages",
           fill = "Category"
         ) +
         theme_void() +
@@ -497,8 +552,17 @@ server <- function(input, output, session) {
           strip.text = element_text(size = 12, face = "bold", color = "white"),
           strip.background = element_rect(fill = "#2c3e50", color = NA),
           panel.spacing = unit(2, "lines"),
-          legend.position = "bottom"
-        )
+          legend.position = "bottom",
+          legend.title = element_text(size = 12, face = "bold"),
+          legend.text = element_text(size = 10)
+        ) + 
+        # Add non-overlapping labels to the pie chart using ggrepel
+        geom_label_repel(aes(y = label_position, x = 1.6, label = Label),
+                         segment.color = 'grey50',
+                         min.segment.length = 0,
+                         size = 4,
+                         fontface = "bold",
+                         box.padding = unit(0.5, "lines"))
       
       p
     }

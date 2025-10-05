@@ -5,7 +5,7 @@ account: ljdvillasica
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 14869601
-bundleId: 10443424
+bundleId: 10869632
 url: https://ljdvillasica.shinyapps.io/field-layouting/
 version: 1
 asMultiple: FALSE

@@ -20,23 +20,28 @@ library(multcompView)
 
 # Non-linear "More is Better" sigmoid scoring function (Type I from paper)
 score_more_is_better <- function(x, x0, b = 2.5) {
+    # Using the standard sigmoid function to map values to 0-1
     1 / (1 + exp(-b * (x - x0)))
 }
 
 # Non-linear "Less is Better" sigmoid scoring function (Type II from paper)
 score_less_is_better <- function(x, x0, b = 2.5) {
+    # Using the inverted sigmoid function (less is better)
     1 / (1 + exp(b * (x - x0)))
 }
 
 # Non-linear "Optimum Range" (Type III from paper - Gaussian-like for illustration)
 score_optimum_range <- function(x, opt_val, width) {
+    # Gaussian/Bell curve function centered at opt_val
     exp(-((x - opt_val)^2) / (2 * width^2))
 }
 
 
-# --- UI Definition ---
+# ----------------------------------------------------------------------
+# --- UI Definition (MODIFIED TO INCLUDE FOOTER CSS AND HTML) ---
+# ----------------------------------------------------------------------
 ui <- dashboardPage(
-    dashboardHeader(title = "Soil Quality Index (SQI) App - PCA & Non-Linear Scoring"),
+    dashboardHeader(title = "Soil Quality Calculator"),
     dashboardSidebar(
         sidebarMenu(
             menuItem("Data Upload", tabName = "data_upload", icon = icon("upload")),
@@ -46,6 +51,39 @@ ui <- dashboardPage(
         )
     ),
     dashboardBody(
+        # 1. ADD CUSTOM CSS TO STYLE AND FIX THE FOOTER POSITION
+        tags$head(
+            tags$style(
+                HTML("
+                    /* Fix the main body to allow the footer space */
+                    .content-wrapper, .right-side {
+                        min-height: 100vh !important;
+                        padding-bottom: 50px; /* Space for footer */
+                    }
+                    /* Custom styling for the persistent footer */
+                    .custom-footer {
+                        position: fixed;
+                        bottom: 0;
+                        left: 230px; /* Matches sidebar width (230px default) */
+                        right: 0;
+                        height: 40px; /* Adjust height as needed */
+                        padding: 10px;
+                        background-color: #f9f9f9; /* Light grey background */
+                        border-top: 1px solid #ddd;
+                        text-align: center;
+                        font-size: 0.8em;
+                        color: #666;
+                        z-index: 1000; /* Ensure it is on top of other elements */
+                    }
+                    /* Adjust footer position when sidebar is collapsed */
+                    .sidebar-collapse .custom-footer {
+                        left: 50px; /* Collapsed sidebar width is usually 50px */
+                    }
+                ")
+            )
+        ),
+        
+        # 2. ALL YOUR TAB ITEMS
         tabItems(
             # Data Upload Tab
             tabItem(tabName = "data_upload",
@@ -160,11 +198,19 @@ ui <- dashboardPage(
                         )
                     )
             )
+        ),
+        
+        # 3. THE ATTRIBUTION HTML WRAPPED IN THE CUSTOM FOOTER DIV
+        tags$footer(
+            class = "custom-footer",
+            HTML('<a href="https://ljdvillasica.shinyapps.io/ReSQ-app/">Soil Quality Calculator V.2</a> © 2025 by <a href="https://orcid.org/0000-0002-5717-7179">Leo Jude D. Villasica and Angelica L. Labiano</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International</a><img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nd.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">')
         )
     )
 )
 
-# --- Server Logic ---
+# ----------------------------------------------------------------------
+# --- Server Logic (UNCHANGED) ---
+# ----------------------------------------------------------------------
 server <- function(input, output, session) {
     
     # Reactive for uploaded data
@@ -498,10 +544,8 @@ server <- function(input, output, session) {
         if (input$post_hoc_test == "Tukey") {
             # Use Tukey's HSD
             tukey_result <- TukeyHSD(aov_model)
-            # multcompLetters now gets the p-values in the correct order
             cld_list <- multcompLetters(tukey_result[[group_var]][, "p adj"])
             
-            # This part of the code needs to be adjusted because multcompLetters output is an ordered vector
             cld_data <- as_tibble(cld_list$Letters, rownames = "group") %>%
                 rename(!!group_var := group, cld = `value`)
             
@@ -511,8 +555,6 @@ server <- function(input, output, session) {
             # Use LSD with Bonferroni correction
             lsd_result <- agricolae::LSD.test(aov_model, trt = group_var, p.adj = "bonferroni", console = FALSE)
             
-            # The `agricolae` package automatically sorts by mean.
-            # Use the correct column name from previous debug: `SQI`
             cld_data <- as_tibble(lsd_result$groups, rownames = "group") %>%
                 rename(!!group_var := group, cld = groups)
             
@@ -538,12 +580,15 @@ server <- function(input, output, session) {
             theme_minimal() +
             theme(
                 axis.text.x = element_text(angle = 45, hjust = 1),
-                plot.margin = unit(c(1, 4, 1, 1), "lines")
+                plot.margin = unit(c(1, 4, 1, 1), "lines"),
+                legend.position = "none" # Hide the fill legend
             ) +
+            # Add horizontal lines for SQI classes
             geom_hline(yintercept = 80, linetype = "dashed", color = "darkgreen", linewidth = 0.8) +
             geom_hline(yintercept = 60, linetype = "dashed", color = "forestgreen", linewidth = 0.8) +
             geom_hline(yintercept = 40, linetype = "dashed", color = "orange", linewidth = 0.8) +
             geom_hline(yintercept = 20, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+            # Add text labels for SQI classes
             annotate("text", x = Inf, y = 80, label = "Q1: Extremely High (80-100)", hjust = 1.1, vjust = -0.5, size = 3, color = "darkgreen") +
             annotate("text", x = Inf, y = 60, label = "Q2: High (60-80)", hjust = 1.1, vjust = -0.5, size = 3, color = "forestgreen") +
             annotate("text", x = Inf, y = 40, label = "Q3: Medium (40-60)", hjust = 1.1, vjust = -0.5, size = 3, color = "orange") +

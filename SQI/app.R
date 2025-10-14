@@ -1,39 +1,45 @@
-# Make sure you have these packages installed:
-# install.packages(c("shiny", "shinydashboard", "readr", "dplyr", "FactoMineR", "ggplot2", "DT", "forcats", "tibble", "tidyr", "factoextra"))
-
 library(shiny)
 library(shinydashboard)
-library(readr)
-library(dplyr)
-library(FactoMineR)
-library(ggplot2)
-library(DT)
-library(forcats)
-library(tibble)
-library(tidyr)
-library(factoextra)
+library(DT) # For interactive tables
+library(tidyverse) # For data manipulation (e.g., pivot_longer)
+library(FactoMineR) # For PCA
+library(factoextra) # For PCA visualization (fviz_eig)
 
-# --- Helper Functions based on the paper's specific NL forms ---
-
-# Non-linear "More is Better" sigmoid scoring function (Type I from paper)
-score_more_is_better <- function(x, x0, b = 2.5) {
+# Helper functions for Non-Linear Scoring
+# Score Type 1: More is Better (Sigmoid Curve)
+score_more_is_better <- function(x, x0, b) {
+    # x: input value (soil property)
+    # x0: inflection point (midpoint)
+    # b: slope (steepness of the curve)
     1 / (1 + exp(-b * (x - x0)))
 }
 
-# Non-linear "Less is Better" sigmoid scoring function (Type II from paper)
-score_less_is_better <- function(x, x0, b = 2.5) {
-    1 / (1 + exp(b * (x - x0)))
+# Score Type 2: Less is Better (Inverted Sigmoid Curve)
+score_less_is_better <- function(x, x0, b) {
+    # x: input value (soil property)
+    # x0: inflection point (midpoint)
+    # b: slope (steepness of the curve)
+    1 - (1 / (1 + exp(-b * (x - x0))))
 }
 
-# Non-linear "Optimum Range" (Type III from paper - Gaussian-like for illustration)
+# Score Type 3: Optimum Range (Optimum value and width define the shape)
 score_optimum_range <- function(x, opt_val, width) {
-    exp(-((x - opt_val)^2) / (2 * width^2))
+    # This approximates a bell-shaped curve where the score is 1 at opt_val and decreases away from it.
+    # We use a scaled difference from the optimum, mapped to the 0-1 range.
+    # Score is 1 at opt_val, and approaches 0 as x moves far from opt_val.
+    
+    # Simple symmetrical exponential decay from the optimum
+    a <- log(0.01) / width^2 # Constant a ensures score is near 0 for x=opt_val +/- width*2
+    score <- exp(a * (x - opt_val)^2)
+    
+    # Clamp score between 0 and 1
+    pmin(pmax(score, 0), 1)
 }
 
 
-# --- UI Definition (remains unchanged for this modification) ---
+# --- UI Definition (MODIFIED TO INCLUDE VISIBLE FOOTER + CSS) ---
 ui <- dashboardPage(
-    dashboardHeader(title = "Soil Quality Index (SQI) App - PCA & Non-Linear Scoring"),
+    dashboardHeader(title = "Soil Quality Calculator App - PCA & Non-Linear Scoring"),
     dashboardSidebar(
         sidebarMenu(
             menuItem("Data Upload", tabName = "data_upload", icon = icon("upload")),
@@ -43,6 +49,39 @@ ui <- dashboardPage(
         )
     ),
     dashboardBody(
+        # 1. ADD CUSTOM CSS TO STYLE AND FIX THE FOOTER POSITION
+        tags$head(
+            tags$style(
+                HTML("
+                    /* Fix the main body to allow the footer space */
+                    .content-wrapper, .right-side {
+                        min-height: 100vh !important;
+                        padding-bottom: 50px; /* Space for footer */
+                    }
+                    /* Custom styling for the persistent footer */
+                    .custom-footer {
+                        position: fixed;
+                        bottom: 0;
+                        left: 230px; /* Matches sidebar width (230px default) */
+                        right: 0;
+                        height: 40px; /* Adjust height as needed */
+                        padding: 10px;
+                        background-color: #f9f9f9; /* Light grey background */
+                        border-top: 1px solid #ddd;
+                        text-align: center;
+                        font-size: 0.8em;
+                        color: #666;
+                        z-index: 1000; /* Ensure it is on top of other elements */
+                    }
+                    /* Adjust footer position when sidebar is collapsed */
+                    .sidebar-collapse .custom-footer {
+                        left: 50px; /* Collapsed sidebar width is usually 50px */
+                    }
+                ")
+            )
+        ),
+        
+        # 2. ALL YOUR TAB ITEMS (UNCHANGED)
         tabItems(
             # Data Upload Tab
             tabItem(tabName = "data_upload",
@@ -152,11 +191,17 @@ ui <- dashboardPage(
                         )
                     )
             )
+        ),
+        
+        # 3. THE ATTRIBUTION HTML WRAPPED IN THE CUSTOM FOOTER DIV
+        tags$footer(
+            class = "custom-footer",
+            HTML('<a href="https://creativecommons.org">Soil Quality Calculator</a> © 2025 by <a href="https://creativecommons.org">Leo Jude D. Villasica and Angelical L. Labiano</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International</a><img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nd.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">')
         )
     )
 )
 
-# --- Server Logic ---
+# --- Server Logic (REMAINS UNCHANGED FROM PREVIOUS CORRECTED VERSION) ---
 server <- function(input, output, session) {
     
     # Reactive for uploaded data
@@ -403,7 +448,7 @@ server <- function(input, output, session) {
         }
         
         # Combine original data (including non-numeric) with the calculated SQI and individual scores
-        # >>> MODIFICATION HERE: Scale SQI to 0-100 <<<
+        # MODIFICATION HERE: Scale SQI to 0-100
         all_final_cols <- df_original %>%
             bind_cols(scores_df_numeric_only %>% select(starts_with(paste0(mds_vars, "_Score")))) %>%
             mutate(SQI = temp_sqi_calc_df$SQI_temp * 100) # Multiply by 100 for 0-100 scale
@@ -429,7 +474,7 @@ server <- function(input, output, session) {
     # Render SQI Histogram
     output$sqi_histogram_plot <- renderPlot({
         req(calculated_sqi_data()$sqi_data)
-        # >>> MODIFICATION HERE: Adjust binwidth for 0-100 scale <<<
+        # MODIFICATION HERE: Adjust binwidth for 0-100 scale
         ggplot(calculated_sqi_data()$sqi_data, aes(x = SQI)) +
             geom_histogram(binwidth = 5, fill = "steelblue", color = "black") + # Changed binwidth from 0.05 to 5
             labs(title = "Distribution of Soil Quality Index (0-100)", x = "Soil Quality Index", y = "Frequency") +
@@ -474,7 +519,7 @@ server <- function(input, output, session) {
                       SD_SQI = sd(SQI, na.rm = TRUE)) %>% # Calculate standard deviation for error bars
             ungroup()
         
-        # >>> MODIFICATION HERE: Add h-lines and labels for SQI classes <<<
+        # MODIFICATION HERE: Add h-lines and labels for SQI classes
         ggplot(plot_data, aes(x = !!sym(group_var), y = Mean_SQI, fill = !!sym(group_var))) +
             geom_bar(stat = "identity", color = "black") +
             geom_errorbar(aes(ymin = Mean_SQI - SD_SQI, ymax = Mean_SQI + SD_SQI), width = 0.2, position = position_dodge(.9)) + # Add error bars

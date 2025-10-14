@@ -26,7 +26,6 @@ score_less_is_better <- function(x, x0, b) {
 score_optimum_range <- function(x, opt_val, width) {
     # This approximates a bell-shaped curve where the score is 1 at opt_val and decreases away from it.
     # We use a scaled difference from the optimum, mapped to the 0-1 range.
-    # Score is 1 at opt_val, and approaches 0 as x moves far from opt_val.
     
     # Simple symmetrical exponential decay from the optimum
     a <- log(0.01) / width^2 # Constant a ensures score is near 0 for x=opt_val +/- width*2
@@ -37,7 +36,9 @@ score_optimum_range <- function(x, opt_val, width) {
 }
 
 
-# --- UI Definition (MODIFIED TO INCLUDE VISIBLE FOOTER + CSS) ---
+# ----------------------------------------------------------------------
+# --- UI Definition (MODIFIED FOOTER HTML) ---
+# ----------------------------------------------------------------------
 ui <- dashboardPage(
     dashboardHeader(title = "Soil Quality Calculator App - PCA & Non-Linear Scoring"),
     dashboardSidebar(
@@ -49,7 +50,7 @@ ui <- dashboardPage(
         )
     ),
     dashboardBody(
-        # 1. ADD CUSTOM CSS TO STYLE AND FIX THE FOOTER POSITION
+        # 1. CUSTOM CSS TO STYLE AND FIX THE FOOTER POSITION
         tags$head(
             tags$style(
                 HTML("
@@ -81,7 +82,7 @@ ui <- dashboardPage(
             )
         ),
         
-        # 2. ALL YOUR TAB ITEMS (UNCHANGED)
+        # 2. TAB ITEMS
         tabItems(
             # Data Upload Tab
             tabItem(tabName = "data_upload",
@@ -193,29 +194,30 @@ ui <- dashboardPage(
             )
         ),
         
-        # 3. THE ATTRIBUTION HTML WRAPPED IN THE CUSTOM FOOTER DIV
+        # 3. THE ATTRIBUTION HTML WITH THE NEW CODE
         tags$footer(
             class = "custom-footer",
-            HTML('<a href="https://creativecommons.org">Soil Quality Calculator</a> © 2025 by <a href="https://creativecommons.org">Leo Jude D. Villasica and Angelical L. Labiano</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International</a><img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nd.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">')
+            HTML('<a href="https://ljdvillasica.shinyapps.io/ReSQ-app/">Soil Quality Calculator V.1</a> © 2025 by <a href="https://orcid.org/0000-0002-5717-7179">Leo Jude D. Villasica and Angelica L. Labiano</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-nd/4.0/">Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International</a><img src="https://mirrors.creativecommons.org/presskit/icons/cc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/by.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nc.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;"><img src="https://mirrors.creativecommons.org/presskit/icons/nd.svg" alt="" style="max-width: 1em;max-height:1em;margin-left: .2em;">')
         )
     )
 )
 
-# --- Server Logic (REMAINS UNCHANGED FROM PREVIOUS CORRECTED VERSION) ---
+# ----------------------------------------------------------------------
+# --- Server Logic (UNCHANGED) ---
+# ----------------------------------------------------------------------
 server <- function(input, output, session) {
     
     # Reactive for uploaded data
     data_raw <- reactive({
         req(input$file1)
-        df <- read.csv(input$file1$datapath, header = input$header, sep = input$sep) # Corrected read.csv
+        df <- read.csv(input$file1$datapath, header = input$header, sep = input$sep)
         
-        # Check if there are any numeric columns for PCA
         df_numeric_check <- df %>% select(where(is.numeric))
         if(ncol(df_numeric_check) == 0) {
             showNotification("No numeric columns found in the uploaded file for PCA. Please check your data.", type = "error")
             return(NULL)
         }
-        df # Return original for later merging with scores
+        df
     })
     
     # Display data preview
@@ -227,8 +229,8 @@ server <- function(input, output, session) {
     normalized_data <- eventReactive(input$run_pca, {
         req(data_raw())
         df_numeric <- data_raw() %>% select(where(is.numeric))
-        if(ncol(df_numeric) == 0) return(NULL) # Redundant check, but safe
-        scale(df_numeric, center = TRUE, scale = TRUE) # Z-score normalization
+        if(ncol(df_numeric) == 0) return(NULL)
+        scale(df_numeric, center = TRUE, scale = TRUE)
     })
     
     # Reactive for PCA results
@@ -242,20 +244,18 @@ server <- function(input, output, session) {
         req(pca_results())
         res_pca <- pca_results()
         eigenvalues <- res_pca$eig[, "eigenvalue"]
-        # Select PCs with eigenvalue >= 1
         selected_pc_indices <- which(eigenvalues >= 1)
         
         if (length(selected_pc_indices) == 0) {
             return(data.frame(Variable = character(0), PC = character(0), Loading = numeric(0), stringsAsFactors = FALSE))
         }
         
-        # Extract loadings for selected PCs
-        loadings_df <- as.data.frame(res_pca$var$coord[, selected_pc_indices, drop = FALSE]) # drop=FALSE to handle single PC
+        loadings_df <- as.data.frame(res_pca$var$coord[, selected_pc_indices, drop = FALSE])
         colnames(loadings_df) <- paste0("Dim.", selected_pc_indices)
         loadings_df <- rownames_to_column(loadings_df, var = "Variable") %>%
             pivot_longer(cols = starts_with("Dim."), names_to = "PC", values_to = "Loading") %>%
             mutate(PC = gsub("Dim.", "PC", PC)) %>%
-            arrange(PC, desc(abs(Loading))) # Sort by PC then by absolute loading
+            arrange(PC, desc(abs(Loading)))
         
         loadings_df
     })
@@ -275,24 +275,20 @@ server <- function(input, output, session) {
     # Dynamic UI for MDS selection (checkboxes)
     output$mds_selection_ui <- renderUI({
         req(pca_loadings_filtered())
-        # Get unique variables from filtered loadings
         all_vars <- unique(pca_loadings_filtered()$Variable)
         
         if (length(all_vars) == 0) {
             return(p("No significant PCs (Eigenvalue ≥ 1) or variables found. Adjust your data or PCA parameters."))
         }
         
-        # Pre-select top variable from each significant PC as a suggestion (as per paper's method)
-        # Ensure there are actually significant PCs before attempting to select
         suggested_mds <- character(0)
         if (nrow(pca_loadings_filtered()) > 0) {
             suggested_mds <- pca_loadings_filtered() %>%
                 group_by(PC) %>%
-                top_n(1, abs(Loading)) %>% # Take variable with highest absolute loading for each PC
+                top_n(1, abs(Loading)) %>%
                 pull(Variable) %>%
                 unique()
         }
-        
         
         checkboxGroupInput("selected_mds_vars", "Select MDS Indicators:",
                            choices = all_vars,
@@ -316,7 +312,7 @@ server <- function(input, output, session) {
                             choices = c("More is Better" = "more_is_better",
                                         "Less is Better" = "less_is_better",
                                         "Optimum Range" = "optimum_range")),
-                uiOutput(paste0("params_for_", var)) # UI for specific parameters
+                uiOutput(paste0("params_for_", var))
             )
         })
     })
@@ -329,7 +325,6 @@ server <- function(input, output, session) {
                 score_type <- input[[paste0("score_type_", var)]]
                 if (is.null(score_type)) return(NULL)
                 
-                # Get mean and SD for initial suggestions for parameters
                 var_data <- data_raw()[[var]]
                 mean_val <- mean(var_data, na.rm = TRUE)
                 sd_val <- sd(var_data, na.rm = TRUE)
@@ -337,12 +332,12 @@ server <- function(input, output, session) {
                 if (score_type == "more_is_better") {
                     fluidRow(
                         column(6, numericInput(paste0("param_", var, "_x0"), "Inflection Point (x0):", value = round(mean_val, 2), step = 0.1)),
-                        column(6, numericInput(paste0("param_", var, "_b"), "Slope (b):", value = 2.5, min = 0.1, step = 0.1)) # Default b to 2.5
+                        column(6, numericInput(paste0("param_", var, "_b"), "Slope (b):", value = 2.5, min = 0.1, step = 0.1))
                     )
                 } else if (score_type == "less_is_better") {
                     fluidRow(
                         column(6, numericInput(paste0("param_", var, "_x0"), "Inflection Point (x0):", value = round(mean_val, 2), step = 0.1)),
-                        column(6, numericInput(paste0("param_", var, "_b"), "Slope (b):", value = 2.5, min = 0.1, step = 0.1)) # Default b to 2.5
+                        column(6, numericInput(paste0("param_", var, "_b"), "Slope (b):", value = 2.5, min = 0.1, step = 0.1))
                     )
                 } else if (score_type == "optimum_range") {
                     fluidRow(
@@ -361,7 +356,6 @@ server <- function(input, output, session) {
         df_original <- data_raw()
         mds_vars <- mds_vars_selected()
         
-        # Select only numeric columns for initial scores_df, preserving original non-numeric ones
         scores_df_numeric_only <- df_original %>% select(where(is.numeric))
         
         # 1. Calculate Individual Scores (Non-Linear)
@@ -387,42 +381,33 @@ server <- function(input, output, session) {
             }
         }
         
-        # 2. Calculate Weights based on PCA Communalities (as per paper)
+        # 2. Calculate Weights based on PCA Communalities
         pca_res <- pca_results()
-        var_loadings_matrix <- pca_res$var$coord # All loadings
+        var_loadings_matrix <- pca_res$var$coord
         
-        # Filter for PCs with eigenvalue >= 1, as per paper's MDS selection criteria
         eigenvalues <- pca_res$eig[, "eigenvalue"]
         significant_pc_indices <- which(eigenvalues >= 1)
         
         if (length(significant_pc_indices) == 0) {
-            showNotification("No significant principal components (Eigenvalue >= 1) found. Cannot calculate weights. Please review PCA results.", type = "error")
+            showNotification("No significant principal components (Eigenvalue >= 1) found. Cannot calculate weights.", type = "error")
             return(NULL)
         }
         
-        # Sum of squared loadings (communalities) for selected MDS variables on significant PCs
         communalities <- sapply(mds_vars, function(v) {
-            if (v %in% rownames(var_loadings_matrix)) {
-                # Check if the variable has loadings on the significant PCs
-                if (length(significant_pc_indices) > 0) {
-                    sum(var_loadings_matrix[v, significant_pc_indices]^2)
-                } else {
-                    0
-                }
+            if (v %in% rownames(var_loadings_matrix) && length(significant_pc_indices) > 0) {
+                sum(var_loadings_matrix[v, significant_pc_indices]^2)
             } else {
-                0 # If variable not found in PCA (e.g., non-numeric or removed)
+                0
             }
         })
         
-        # Normalize weights to sum to 1
         total_communalities <- sum(communalities)
         if (total_communalities == 0) {
-            showNotification("Sum of communalities is zero for selected MDS indicators. Cannot calculate weights. Check MDS selection.", type = "error")
+            showNotification("Sum of communalities is zero for selected MDS indicators.", type = "error")
             return(NULL)
         }
         weights <- communalities / total_communalities
         
-        # Store weights for display
         mds_weights_df <- tibble(
             Indicator = mds_vars,
             Communalities = communalities,
@@ -430,11 +415,8 @@ server <- function(input, output, session) {
         )
         
         # 3. Calculate SQI
-        # Initialize SQI column in a temporary dataframe for calculation
-        temp_sqi_calc_df <- scores_df_numeric_only %>%
-            select(all_of(mds_vars)) # Ensure only original MDS vars are here for multiplication
-        
-        temp_sqi_calc_df$SQI_temp <- 0 # Initialize SQI column
+        temp_sqi_calc_df <- scores_df_numeric_only %>% select(all_of(mds_vars))
+        temp_sqi_calc_df$SQI_temp <- 0
         
         for (i in seq_along(mds_vars)) {
             var_name <- mds_vars[i]
@@ -442,19 +424,16 @@ server <- function(input, output, session) {
             score_col_name <- paste0(var_name, "_Score")
             if (score_col_name %in% names(scores_df_numeric_only)) {
                 temp_sqi_calc_df$SQI_temp <- temp_sqi_calc_df$SQI_temp + (scores_df_numeric_only[[score_col_name]] * weight_val)
-            } else {
-                showNotification(paste("Warning: Score column not found for", var_name, ". Skipping calculation for this indicator."), type = "warning")
             }
         }
         
-        # Combine original data (including non-numeric) with the calculated SQI and individual scores
-        # MODIFICATION HERE: Scale SQI to 0-100
+        # Scale SQI to 0-100
         all_final_cols <- df_original %>%
             bind_cols(scores_df_numeric_only %>% select(starts_with(paste0(mds_vars, "_Score")))) %>%
-            mutate(SQI = temp_sqi_calc_df$SQI_temp * 100) # Multiply by 100 for 0-100 scale
+            mutate(SQI = temp_sqi_calc_df$SQI_temp * 100)
         
         list(
-            sqi_data = all_final_cols, # Now contains original + scores + SQI (0-100)
+            sqi_data = all_final_cols,
             mds_weights = mds_weights_df
         )
     })
@@ -469,14 +448,13 @@ server <- function(input, output, session) {
     output$mds_weights_table <- renderDT({
         req(calculated_sqi_data()$mds_weights)
         calculated_sqi_data()$mds_weights
-    }, options = list(dom = 't')) # 't' for table only, no search/pagination
+    }, options = list(dom = 't'))
     
     # Render SQI Histogram
     output$sqi_histogram_plot <- renderPlot({
         req(calculated_sqi_data()$sqi_data)
-        # MODIFICATION HERE: Adjust binwidth for 0-100 scale
         ggplot(calculated_sqi_data()$sqi_data, aes(x = SQI)) +
-            geom_histogram(binwidth = 5, fill = "steelblue", color = "black") + # Changed binwidth from 0.05 to 5
+            geom_histogram(binwidth = 5, fill = "steelblue", color = "black") +
             labs(title = "Distribution of Soil Quality Index (0-100)", x = "Soil Quality Index", y = "Frequency") +
             theme_minimal()
     })
@@ -484,7 +462,6 @@ server <- function(input, output, session) {
     # Dynamic UI for selecting grouping variable
     output$grouping_variable_selector_ui <- renderUI({
         req(data_raw())
-        # Get non-numeric column names from the raw data
         non_numeric_cols <- names(data_raw() %>% select(where(~!is.numeric(.))))
         
         if (length(non_numeric_cols) == 0) {
@@ -511,24 +488,22 @@ server <- function(input, output, session) {
             )
         }
         
-        # Ensure the grouping variable is a factor
         plot_data <- calculated_sqi_data()$sqi_data %>%
             mutate(!!sym(group_var) := as.factor(!!sym(group_var))) %>%
             group_by(!!sym(group_var)) %>%
             summarise(Mean_SQI = mean(SQI, na.rm = TRUE),
-                      SD_SQI = sd(SQI, na.rm = TRUE)) %>% # Calculate standard deviation for error bars
+                      SD_SQI = sd(SQI, na.rm = TRUE)) %>%
             ungroup()
         
-        # MODIFICATION HERE: Add h-lines and labels for SQI classes
         ggplot(plot_data, aes(x = !!sym(group_var), y = Mean_SQI, fill = !!sym(group_var))) +
             geom_bar(stat = "identity", color = "black") +
-            geom_errorbar(aes(ymin = Mean_SQI - SD_SQI, ymax = Mean_SQI + SD_SQI), width = 0.2, position = position_dodge(.9)) + # Add error bars
+            geom_errorbar(aes(ymin = Mean_SQI - SD_SQI, ymax = Mean_SQI + SD_SQI), width = 0.2, position = position_dodge(.9)) +
             labs(title = paste("Mean Soil Quality Index (0-100) by", group_var),
                  x = group_var,
                  y = "Mean Soil Quality Index (0-100)") +
             theme_minimal() +
-            theme(axis.text.x = element_text(angle = 45, hjust = 1), # Rotate x-axis labels if needed
-                  plot.margin = unit(c(1, 4, 1, 1), "lines")) + # Increase right margin for labels
+            theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                  plot.margin = unit(c(1, 4, 1, 1), "lines")) +
             
             # Add horizontal lines for class boundaries
             geom_hline(yintercept = 80, linetype = "dashed", color = "darkgreen", linewidth = 0.8) +
@@ -536,7 +511,7 @@ server <- function(input, output, session) {
             geom_hline(yintercept = 40, linetype = "dashed", color = "orange", linewidth = 0.8) +
             geom_hline(yintercept = 20, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
             
-            # Add text labels for soil quality classes (positioned slightly right of plot area)
+            # Add text labels for soil quality classes
             annotate("text", x = Inf, y = 80, label = "Q1: Extremely High (80-100)",
                      hjust = 1.1, vjust = -0.5, size = 3, color = "darkgreen") +
             annotate("text", x = Inf, y = 60, label = "Q2: High (60-80)",
@@ -546,9 +521,8 @@ server <- function(input, output, session) {
             annotate("text", x = Inf, y = 20, label = "Q4: Poor (20-40)",
                      hjust = 1.1, vjust = -0.5, size = 3, color = "firebrick") +
             annotate("text", x = Inf, y = 0, label = "Q5: Extremely Poor (0-20)",
-                     hjust = 1.1, vjust = -0.5, size = 3, color = "darkred") + # Added Q5 label
+                     hjust = 1.1, vjust = -0.5, size = 3, color = "darkred") +
             
-            # Set y-axis limits to 0-100 and allow text annotations to extend beyond plot area
             coord_cartesian(ylim = c(0, 100), clip = "off")
     })
     

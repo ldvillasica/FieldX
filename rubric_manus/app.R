@@ -137,10 +137,10 @@ rubric_details <- list(
             "1" = "The project is entirely unfeasible as proposed. The methods, timeline, and resources are completely out of touch with reality."
         ),
         "Writing Quality & Professionalism" = list(
-            "4" = "The entire proposal is meticulously written with perfect grammar, spelling, and professional formatting. It is free of all errors.",
-            "3" = "The writing is professional and clear with only a few minor grammatical or spelling errors. Formatting is consistent.",
-            "2" = "The proposal contains multiple writing errors (grammar, spelling) that distract from the content. Formatting is inconsistent.",
-            "1" = "The writing is filled with errors, making the proposal difficult to read and unprofessional."
+            "4" = "The entire proposal is meticulously written with perfect grammar, spelling, and professional formatting. It is free of all errors and Plagiarism and AI score is below 20%.",
+            "3" = "The writing is professional and clear with only a few minor grammatical or spelling errors. Formatting is consistent. Plagiarism and AI score is below 30%.",
+            "2" = "The proposal contains multiple writing errors (grammar, spelling) that distract from the content. Formatting is inconsistent. Plagiarism and AI score is below 40%.",
+            "1" = "The writing is filled with errors, making the proposal difficult to read and unprofessional. Plagiarism and AI score is below 50%."
         )
     )
 )

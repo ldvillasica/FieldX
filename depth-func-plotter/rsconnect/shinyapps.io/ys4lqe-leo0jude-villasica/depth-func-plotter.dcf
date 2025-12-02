@@ -1,12 +1,12 @@
-name: soil-profile-sketcher
-title: soil-profile-sketcher
+name: depth-func-plotter
+title: depth-func-plotter
 username: ys4lqe-leo0jude-villasica
 account: ys4lqe-leo0jude-villasica
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
-appId: 14860541
-bundleId: 11254883
-url: https://ys4lqe-leo0jude-villasica.shinyapps.io/soil-profile-sketcher/
+appId: 16213312
+bundleId: 11261076
+url: https://ys4lqe-leo0jude-villasica.shinyapps.io/depth-func-plotter/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE

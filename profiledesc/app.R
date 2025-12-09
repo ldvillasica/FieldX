@@ -43,7 +43,7 @@ wrap_text_by_width <- function(text, width) {
 # ---
 # Define UI for soil profile sketcher app
 ui <- fluidPage(
-    titlePanel("Soil Profile Sketcher: Adjustable Text Wrap"),
+    titlePanel("Soil Profile Sketcher: Adjustable Text Wrap and Font"),
     
     sidebarLayout(
         sidebarPanel(
@@ -62,6 +62,11 @@ ui <- fluidPage(
                          min = 5, max = 50),
             tags$hr(),
             
+            # --- NEW: LABEL FONT SIZE CONTROL ---
+            sliderInput("label_font_size", "Horizon Label Font Size (cex):",
+                        min = 0.5, max = 1.5, value = 0.7, step = 0.05),
+            tags$hr(),
+            
             # CSV parsing options
             radioButtons("sep", "Separator",
                          choices = c(Comma = ",", Semicolon = ";", Tab = "\t"),
@@ -71,7 +76,7 @@ ui <- fluidPage(
                          selected = '"'),
             tags$hr(),
             
-            # --- LABEL OFFSET CONTROL (Slider) - MAX LIMIT INCREASED TO 5.0 ---
+            # --- LABEL OFFSET CONTROL (Slider) ---
             sliderInput("label_offset", "Space Between Profile and Description (units):",
                         min = 0, max = 5.0, value = 0.5, step = 0.1),
             tags$hr(),
@@ -82,7 +87,7 @@ ui <- fluidPage(
             sliderInput("plotHeight", "Plot Height (pixels):",
                         min = 300, max = 1200, value = 700, step = 50),
             tags$hr(),
-            helpText("Adjusting the wrap width and offset will affect the required plot width.")
+            helpText("Adjusting the wrap width, font size, and offset will affect the required plot width.")
         ),
         
         mainPanel(
@@ -169,7 +174,9 @@ server <- function(input, output) {
             color = 'color',
             label = 'Profile',
             width = 0.3,
-            cex.names = 0.7,
+            
+            # --- UPDATED: Use the new slider input for font size (cex.names) ---
+            cex.names = input$label_font_size, 
             
             # --- Using absolute label position ---
             label.x = text_start_x, 

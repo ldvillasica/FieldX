@@ -58,7 +58,7 @@ ui <- fluidPage(
             # --- TEXT WRAPPING CONTROL ---
             numericInput("text_wrap_limit", 
                          "Text Wrap Width (Characters per Line):", 
-                         value = 15, # Default value for a typical plot width
+                         value = 15, 
                          min = 5, max = 50),
             tags$hr(),
             
@@ -71,9 +71,9 @@ ui <- fluidPage(
                          selected = '"'),
             tags$hr(),
             
-            # --- LABEL OFFSET CONTROL (Slider) ---
+            # --- LABEL OFFSET CONTROL (Slider) - MAX LIMIT INCREASED TO 5.0 ---
             sliderInput("label_offset", "Space Between Profile and Description (units):",
-                        min = 0, max = 1.5, value = 0.5, step = 0.1),
+                        min = 0, max = 5.0, value = 0.5, step = 0.1),
             tags$hr(),
             
             # Plot sizing
@@ -154,31 +154,32 @@ server <- function(input, output) {
         # Use a standard margin
         par(mar = c(3, 1, 3, 1)) 
         
-        # Calculate the required plot range (x-axis) to reserve space for the labels
-        # min_xlim (start of plot) = 0.1 (standard)
-        # Profile Width = 0.3 (fixed in plotSPC)
-        # Required extra space = input$label_offset (user slider) + space for labels (1.5 units is ample)
+        # --- ABSOLUTE POSITION CALCULATION (UNCHANGED) ---
+        # Text starts at Profile Right Edge (0.1 + 0.3) + Slider Value
+        text_start_x <- 0.1 + 0.3 + input$label_offset
+        
+        # Calculate the required plot range (x-axis)
         min_xlim <- 0.1
-        max_xlim <- min_xlim + 0.3 + input$label_offset + 1.5
+        # Max X-limit now accounts for the increased text_start_x + a fixed space (2.0)
+        max_xlim <- text_start_x + 2.0 
         
         plotSPC(
             pedon_single, 
-            name = 'CombinedLabel',  # Use the new wrapped label column
+            name = 'CombinedLabel', 
             color = 'color',
             label = 'Profile',
             width = 0.3,
             cex.names = 0.7,
             
-            # --- FIX: Set the plot's X-axis limits to reserve space ---
-            plot.xlim = c(min_xlim, max_xlim), 
+            # --- Using absolute label position ---
+            label.x = text_start_x, 
             
-            # --- Use the slider value for the label offset ---
-            label.x.offset = input$label_offset, 
+            # --- Dynamically resizing the canvas ---
+            plot.xlim = c(min_xlim, max_xlim), 
             
             # --- FINAL PLOT ARGUMENTS ---
             depth.axis = FALSE,      
             hz.depths = TRUE,        
-            name.style = 'center',   
             
             plot.class.stats = FALSE,
             fixLabelCollisions = TRUE

@@ -12,7 +12,7 @@ library(dplyr)
 
 # --- UI (User Interface) ---
 ui <- fluidPage(
-    titlePanel("AQP Paper Style Depth Plotter (Site-Specific Visualization)"),
+    titlePanel("Depth Function Plotter (version 2)"),
     
     sidebarLayout(
         sidebarPanel(

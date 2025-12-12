@@ -15,7 +15,7 @@ library(zoo)
 
 # --- UI (User Interface) ---
 ui <- fluidPage(
-    titlePanel("Depth Function Plotter"),
+    titlePanel("Depth Function Plotter (version 1)"),
     
     sidebarLayout(
         sidebarPanel(

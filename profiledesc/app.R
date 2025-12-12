@@ -1,5 +1,3 @@
-# app.R
-
 # Load necessary packages
 library(shiny)
 library(aqp)
@@ -35,7 +33,7 @@ wrap_text_by_width <- function(text, width) {
 
 # Define UI for soil profile sketcher app
 ui <- fluidPage(
-    titlePanel("Soil Profile Sketcher: Topography (Offset) + Distinctness (LTY)"),
+    titlePanel("Soil Profile Sketcher: Topography (Offset) + Distinctness (LTY) + Volume Fraction"),
     
     sidebarLayout(
         sidebarPanel(
@@ -45,9 +43,13 @@ ui <- fluidPage(
             tags$hr(),
             checkboxInput("header", "Header", TRUE),
             
-            # Select inputs for the two boundary features
+            # Select inputs for boundary features
             uiOutput("distinctness_column_selector"), 
             uiOutput("topography_column_selector"),
+            
+            # Select input for the new Volume Fraction feature
+            uiOutput("volume_fraction_column_selector"),
+            tags$hr(),
             
             uiOutput("profile_selector"), 
             tags$hr(),
@@ -56,8 +58,15 @@ ui <- fluidPage(
             h4("Boundary Visualization"),
             helpText(
                 "Distinctness (Line Type): A (Solid), C (Dashed), G (Dotted), D (Dot-Dash).", br(),
-                "Topography (Offset): Draws a chevron pattern (e.g., Wavy/Irregular have larger chevrons).", br(),
+                "Topography (Offset): Draws a chevron pattern.", br(),
                 "**Lines are colored white for maximum contrast.**"
+            ),
+            
+            # --- VOLUME FRACTION INFO ---
+            h4("Volume Fraction Visualization"),
+            helpText(
+                "The selected column's percentage (0-100) is displayed as **white dots** (mottles/fragments) inside the horizon.", br(),
+                "Higher percentage = higher density of dots."
             ),
             tags$hr(),
             
@@ -92,7 +101,7 @@ ui <- fluidPage(
         ),
         
         mainPanel(
-            h3("Selected Profile Sketch with Offset and Line Type Encoding"),
+            h3("Selected Profile Sketch with Encoded Features"),
             fluidRow(
                 column(12, align = "center",
                        plotOutput("profilePlot", width = "auto", height = "auto")
@@ -111,7 +120,8 @@ server <- function(input, output, session) {
         req(input$file1)
         
         inFile <- input$file1
-        df <- read.csv(inFile$datapath, header = input$header, sep = input$sep, quote = input$quote)
+        # Added input$quote to the read.csv call for robustness
+        df <- read.csv(inFile$datapath, header = input$header, sep = input$sep) 
         
         required_cols <- c("Profile", "top", "bottom", "Hue", "Value", "Chroma", "Horizon.Name", "Description")
         
@@ -144,45 +154,57 @@ server <- function(input, output, session) {
                     selected = if(is.na(selected_col)) choices[1] else selected_col)
     })
     
+    # Dynamic Column Selector for Volume Fraction (NEW)
+    output$volume_fraction_column_selector <- renderUI({
+        df <- pedon_data_raw()
+        choices <- names(df)
+        # Suggest common names for mottles/fragments
+        selected_col <- intersect(choices, c("VolumeFraction", "RockFragmentFraction", "MottleFraction"))[1]
+        
+        selectInput("volFractionCol", "Select Volume Fraction Column (%):", 
+                    choices = choices, 
+                    selected = if(is.na(selected_col)) choices[1] else selected_col)
+    })
+    
     pedon_data_prepared <- reactive({
         df <- pedon_data_raw()
-        req(input$distinctnessCol, input$topographyCol)
+        req(input$distinctnessCol, input$topographyCol, input$volFractionCol)
         
         # 1. Prepare DISTINCTNESS (Map codes to LTY)
         df$DistinctnessCode <- df[[input$distinctnessCol]]
         
-        # Mapping distinctness codes to R Line Type (LTY) codes: 1=solid, 2=dashed, 3=dotted, 4=dotdash
         lty_map <- c(
             'A' = 1, # Abrupt -> Solid
             'C' = 2, # Clear -> Dashed
             'G' = 3, # Gradual -> Dotted
             'D' = 4  # Diffuse -> Dot-Dash
         )
-        # Map character codes to numeric values
         df$distinctness.lty <- lty_map[as.character(df$DistinctnessCode)]
-        # Robustly ensure LTY column is numeric
         df$distinctness.lty <- as.numeric(df$distinctness.lty) 
         df$distinctness.lty[is.na(df$distinctness.lty)] <- 1 # Default to solid
         
         # 2. Prepare TOPOGRAPHY (Map codes to numeric offset for Chevrons)
         df$TopographyCode <- df[[input$topographyCol]]
-        
-        # Use aqp helper function to convert codes (S, W, I, B) to vertical offset (in cm)
         df$ht_offset <- hzTopographyCodeToOffset(df$TopographyCode)
         
         # 3. SET LINE COLOR TO WHITE FOR CONTRAST
         df$boundary_color <- 'white'
         
-        # 4. Prepare Plot Labels and Colors
+        # 4. Prepare VOLUME FRACTION (NEW)
+        # Rename the selected column to a standard aqp name for addVolumeFraction()
+        df$A.coord <- df[[input$volFractionCol]]
+        df$A.coord <- pmax(0, pmin(100, df$A.coord)) # Clamp values between 0 and 100
+        df$A.coord[is.na(df$A.coord)] <- 0 # Treat NA as 0% fraction
+        
+        # 5. Prepare Plot Labels and Colors
         wrap_width <- input$text_wrap_limit
         df$WrappedDescription <- sapply(df$Description, wrap_text_by_width, width = wrap_width)
         
         df$CombinedLabel <- paste0(df$Horizon.Name, "\n", df$WrappedDescription)
         df$color <- munsell2rgb(df$Hue, df$Value, df$Chroma)
         
+        # Create SPC object
         depths(df) <- Profile ~ top + bottom
-        
-        # *** REMOVED set_plot_attributes() DUE TO FUNCTION NOT FOUND ERROR ***
         
         return(df)
     })
@@ -215,6 +237,7 @@ server <- function(input, output, session) {
         min_xlim <- 0.1
         max_xlim <- text_start_x + 2.0 
         
+        # 1. Plot the base profile and boundaries
         plotSPC(
             pedon_single, 
             name = 'CombinedLabel', 
@@ -226,27 +249,31 @@ server <- function(input, output, session) {
             hz.topography.offset = 'ht_offset', 
             
             # --- DISTINCTNESS: LTY ENCODING (Line Type) ---
-            # Set LTY and LWD controls to 1 to enable per-horizon styles
-            lty.hz = 1,      # Enables LTY control                     
-            lwd.hz = 1,      # Enables LWD (and thus, line color) control
-            
-            # Use the most commonly accepted column name for LTY/Distinctness when mixed with offsets
+            lty.hz = 1, 
+            lwd.hz = 1, 
             hz.boundary.lty = 'distinctness.lty', 
+            lwd.col = 'boundary_color', 
             
-            # --- SET BOUNDARY COLOR TO WHITE ---
-            lwd.col = 'boundary_color',           # Use the column containing 'white'
+            # Set p.shape/p.interval to NULL to avoid conflict with addVolumeFraction
+            p.shape = NULL,
+            p.interval = NULL,
             
             cex.names = input$label_font_size, 
             label.x = text_start_x, 
             plot.xlim = c(min_xlim, max_xlim), 
             
-            depth.axis = FALSE,      
-            hz.depths = TRUE,        
+            depth.axis = FALSE, 
+            hz.depths = TRUE, 
             
             plot.class.stats = FALSE,
             fixLabelCollisions = TRUE
         )
         
+        # 2. Add the volumetric fraction visualization (White dots/patterns)
+        # 'A.coord' is the column containing the 0-100% fraction data.
+        addVolumeFraction(pedon_single, colname = 'A.coord', col = 'white')
+        
+        # 3. Add Title and Legend
         title(paste("Profile:", input$selectedProfile), line = 1.5, cex.main = 1.2)
         
         # Legend for Distinctness (LTY)

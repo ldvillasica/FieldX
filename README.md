@@ -1,5 +1,7 @@
 ## FieldX apps
 
+FieldX stands for "Future-driven Innovations for Experimental Land Data Exploration & Analysis".
+
 These apps are for specific use-cases. It is developed to cater special visualization needs for soil data. The apps are developed with the aid of Gemini (an AI agent from Google). 
 
 General instructions and desired outputs from which each app was design was purely from its author and some colleagues. 

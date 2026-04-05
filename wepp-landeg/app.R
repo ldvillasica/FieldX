@@ -2,121 +2,125 @@ library(shiny)
 library(ggplot2)
 library(shinythemes)
 library(dplyr)
+library(tidyr)
 
-# --- 1. THE DYNAMIC HYDRO-PHYSICS ENGINE ---
-calc_all_metrics <- function(wdc, di, fi, was, bd, clay, sand, silt, rain, slope, strategy, vwc) {
+# --- 1. THE PHYSICS ENGINE ---
+calc_soil_physics <- function(sand, silt, clay, vwc, bd, wdc, wds, was, rain, slope, strategy) {
+    # Safe math: Add small constant to prevent division by zero (NaN/Inf)
+    denom_texture <- clay + silt + 0.01
+    denom_clay <- clay + 0.01
     
-    # A. Internal Health (SDI)
-    structural_res <- (was / 100) * (fi + 0.1)
-    stability_gap <- (di + 0.01) / (structural_res + 0.05)
-    sdi_risk <- pmin(100, (stability_gap * (bd / 1.5) * 20))
+    # A. Stability Indices
+    dr_val <- ((wdc + wds) / denom_texture) * 100
+    dr_dec <- dr_val / 100
+    fi_val <- (clay - wdc) / denom_clay
     
-    # B. Hydrology: The Infiltration Storage Gap
+    # B. Soil Degradation Index (SDI)
+    resilience <- (was / 100) * (fi_val + 0.1)
+    sdi_risk <- pmin(100, ((dr_dec + 0.01) / (resilience + 0.05)) * (bd / 1.5) * 20)
+    
+    # C. Hydrology
     porosity <- 1 - (bd / 2.65)
-    sat_ratio <- pmin(1, vwc / porosity) 
+    sat_ratio <- pmin(1, vwc / (porosity + 0.01)) 
+    infilt_cap <- (100 - clay) * (1.5 / bd) * 0.5 
+    clogging_idx <- (wdc * dr_dec) * (bd / 1.5)
+    eff_infilt <- pmax(2, (infilt_cap / (1 + (clogging_idx / 10))) * (1 - sat_ratio))
     
-    base_infilt <- (100 - clay) * (1.5 / bd) * 0.5 
-    clogging_index <- (wdc * di) * (bd / 1.5)
+    # D. Erosion Modeling
+    runoff <- pmax(0, rain - eff_infilt)
+    ki <- (dr_dec / (fi_val + 0.1)) * (wdc / 100) 
+    kr <- 1 / (was + 1)                          
     
-    # Effective Infiltration adjusted for both Clogging and Initial Wetness
-    eff_infilt <- pmax(2, (base_infilt / (1 + (clogging_index / 10))) * (1 - sat_ratio))
+    mitigation <- switch(strategy, "None"=1.0, "Gypsum"=0.65, "Cover Crops"=0.55, "Biochar"=0.75)
     
-    # C. Runoff Generation
-    runoff_depth <- pmax(0, rain - eff_infilt)
+    soil_loss <- ((ki * (rain^2) * 0.0001) + (kr * runoff * (slope/100))) * 10 * mitigation
+    sed_yield <- soil_loss * pmin(1, (slope / 20)^1.5)
     
-    # D. WEPP Erodibility
-    custom_Ki <- (di / (fi + 0.1)) * (wdc / 100)
-    custom_Kr <- 1 / (was + 1) 
-    tau_c <- (bd * (clay/100) * (1 + silt/100)) * 5 
-    
-    mit <- switch(strategy, "None"=1.0, "Gypsum"=0.65, "Cover Crops"=0.55, "Biochar"=0.75)
-    
-    # E. Erosion Physics
-    interrill <- (custom_Ki * (rain^2) * 0.0001) * mit
-    shear_stress <- (10 * (runoff_depth/100) * (slope/100)) 
-    rill <- pmax(0, custom_Kr * (shear_stress - tau_c)) * mit
-    
-    loss_tons <- (interrill + rill) * 10
-    yield_tons <- loss_tons * pmin(1, (slope / 20)^1.5)
-    
-    return(data.frame(SDI = sdi_risk, Clog = clogging_index, Infilt = eff_infilt, 
-                      Runoff = runoff_depth, Loss = loss_tons, Yield = yield_tons))
+    return(data.frame(
+        DR = dr_val, FI = fi_val, SDI = sdi_risk, 
+        Loss = soil_loss, Yield = sed_yield, 
+        Infilt = eff_infilt, Clog = clogging_idx, Runoff = runoff
+    ))
 }
 
 # --- 2. THE USER INTERFACE ---
 ui <- fluidPage(
     theme = shinytheme("flatly"),
-    titlePanel("R-based WEPP + Soil Health Indexing"),
+    tags$head(tags$style(HTML("
+    .metric-box { background: #f8f9fa; border-top: 5px solid #2c3e50; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 15px; }
+    .label-bold { font-weight: bold; color: #7f8c8d; text-transform: uppercase; font-size: 0.85em; margin-bottom: 5px; }
+    .status-text { font-weight: bold; font-size: 0.9em; }
+  "))),
+    
+    titlePanel("Soil Physics Lab: Scenario Diagnostic Tool"),
+    hr(),
     
     sidebarLayout(
         sidebarPanel(
-            tabsetPanel(id = "input_mode",
-                        tabPanel("Manual Lab",
-                                 br(),
-                                 fluidRow(
-                                     column(6, numericInput("bd", "Bulk Density", 1.3, step=0.1)),
-                                     column(6, sliderInput("vwc", "Initial VWC", 0, 0.5, 0.15))
-                                 ),
-                                 hr(),
-                                 fluidRow(
-                                     column(4, numericInput("sand", "Sand%", 30)),
-                                     column(4, numericInput("silt", "Silt%", 30)),
-                                     column(4, numericInput("clay", "Clay%", 40))
-                                 ),
-                                 sliderInput("was", "Wet Aggregate Stability (%)", 0, 100, 60),
-                                 sliderInput("wdc", "Water Dispersible Clay (%)", 0, 50, 15),
-                                 sliderInput("di", "Dispersion Index (DI)", 0, 1, 0.3),
-                                 sliderInput("fi", "Flocculation Index (FI)", 0, 1, 0.7)
-                        ),
-                        tabPanel("Bulk Upload",
-                                 br(),
-                                 fileInput("bulk_csv", "Upload CSV", accept = ".csv"),
-                                 helpText("Ensure CSV includes 'VWC' column."),
-                                 uiOutput("group_selector_ui")
-                        )
+            width = 4,
+            h4("Step 1: Input Lab Data"),
+            fluidRow(
+                column(4, numericInput("sand", "Sand %", 30)),
+                column(4, numericInput("silt", "Silt %", 30)),
+                column(4, numericInput("clay", "Clay %", 40))
             ),
+            fluidRow(
+                column(6, numericInput("wdc", "WDC %", 15)),
+                column(6, numericInput("wds", "WDS %", 5))
+            ),
+            sliderInput("was", "Wet Aggregate Stability (%)", 0, 100, 60),
+            numericInput("bd", "Bulk Density (g/cm³)", 1.3, step=0.1),
+            sliderInput("vwc", "Initial Water Content (VWC)", 0, 0.5, 0.15),
+            
             hr(),
-            h4("Simulation Environment"),
+            h4("Step 2: Field Conditions"),
             sliderInput("rain", "Rain Intensity (mm/hr)", 0, 150, 60),
             sliderInput("slope", "Slope (%)", 0, 50, 10),
-            selectInput("strategy", "Mitigation Strategy", choices = c("None", "Gypsum", "Cover Crops", "Biochar")),
-            hr(),
-            downloadButton("download_report", "Export CSV", class = "btn-success")
+            selectInput("strategy", "Mitigation Strategy", 
+                        choices = c("None", "Gypsum", "Cover Crops", "Biochar"))
         ),
         
         mainPanel(
-            tabsetPanel(
-                tabPanel("Scenario Analysis",
-                         br(),
-                         # RESTORED SDI SECTION
-                         wellPanel(
-                             style = "padding-top: 5px; padding-bottom: 5px; background: #fdfefe;",
-                             h4("Soil Degradation Index (Internal Health)"),
-                             h3(textOutput("sdi_status"), style = "margin-top: 0;"),
-                             plotOutput("sdi_gauge", height = "35px")
-                         ),
-                         # HYDROLOGY BOXES
-                         fluidRow(
-                             column(4, wellPanel(h5("Est. Infiltration"), h3(textOutput("infilt_man")), "mm/hr")),
-                             column(4, wellPanel(h5("Runoff Depth"), h3(textOutput("runoff_man"), style="color:#2980b9"), "mm/hr")),
-                             column(4, wellPanel(h5("Pore Clogging"), h3(textOutput("clog_man"), style="color:#8e44ad")))
-                         ),
-                         # EROSION BOXES
-                         fluidRow(
-                             column(6, wellPanel(style="background:#fdf2e9; border-left: 5px solid #e67e22;", 
-                                                 h4("Gross Soil Loss"), h2(textOutput("loss_man")), "tons/ha")),
-                             column(6, wellPanel(style="background:#eafaf1; border-left: 5px solid #27ae60;", 
-                                                 h4("Net Sed. Yield"), h2(textOutput("yield_man")), "tons/ha"))
-                         ),
-                         plotOutput("erosion_curve", height = "300px"),
-                         hr(),
-                         h4("Sensitivity Analysis"),
-                         tableOutput("sens_table")
+            width = 8,
+            fluidRow(
+                column(4, div(class = "metric-box",
+                              div(class="label-bold", "Soil Degradation Index"),
+                              h2(textOutput("sdi_val")),
+                              span(class="status-text", textOutput("sdi_status")))),
+                column(4, div(class = "metric-box",
+                              div(class="label-bold", "Predicted Soil Loss"),
+                              h2(textOutput("yield_val")),
+                              p("tons / hectare"))),
+                column(4, div(class = "metric-box",
+                              div(class="label-bold", "Effective Infiltration"),
+                              h2(textOutput("infilt_val")),
+                              p("mm / hour")))
+            ),
+            br(),
+            
+            fluidRow(
+                column(7, 
+                       wellPanel(
+                           h4("Topographic Sensitivity"),
+                           plotOutput("slope_curve", height = "300px")
+                       )
                 ),
-                tabPanel("Bulk Comparison",
-                         br(),
-                         plotOutput("bulk_plot"),
-                         tableOutput("bulk_table")
+                column(5, 
+                       wellPanel(
+                           h4("Sensitivity Analysis"),
+                           p(tags$small("Projected impact on Soil Loss if property improves by 10%")),
+                           tableOutput("sens_table")
+                       )
+                )
+            ),
+            
+            wellPanel(
+                h4("Physics Summary Detail"),
+                fluidRow(
+                    column(3, helpText("Dispersion Ratio (DR):"), strong(textOutput("dr_out"), "%")),
+                    column(3, helpText("Flocculation Index (FI):"), strong(textOutput("fi_out"))),
+                    column(3, helpText("Runoff Depth (mm/hr):"), strong(textOutput("runoff_out"))),
+                    column(3, helpText("Pore Clogging Index:"), strong(textOutput("clog_out")))
                 )
             )
         )
@@ -126,89 +130,87 @@ ui <- fluidPage(
 # --- 3. THE SERVER ---
 server <- function(input, output) {
     
-    res_man <- reactive({
-        calc_all_metrics(input$wdc, input$di, input$fi, input$was, input$bd, 
-                         input$clay, input$sand, input$silt, input$rain, input$slope, input$strategy, input$vwc)
-    })
-    
-    # SDI Outputs
-    output$sdi_status <- renderText({
-        s <- res_man()$SDI
-        status <- if(s < 35) "HEALTHY" else if(s < 70) "STRESS WARNING" else "STRUCTURAL COLLAPSE"
-        paste0(status, " (", round(s, 1), "%)")
-    })
-    
-    output$sdi_gauge <- renderPlot({
-        ggplot() + geom_rect(aes(xmin=0, xmax=100, ymin=0, ymax=1), fill="#ecf0f1") +
-            geom_rect(aes(xmin=0, xmax=res_man()$SDI, ymin=0, ymax=1), 
-                      fill=ifelse(res_man()$SDI > 70, "#e74c3c", "#3498db")) + theme_void()
-    })
-    
-    output$infilt_man <- renderText({ round(res_man()$Infilt, 1) })
-    output$runoff_man <- renderText({ round(res_man()$Runoff, 1) })
-    output$clog_man <- renderText({ round(res_man()$Clog, 2) })
-    output$loss_man <- renderText({ round(res_man()$Loss, 2) })
-    output$yield_man <- renderText({ round(res_man()$Yield, 2) })
-    
-    output$erosion_curve <- renderPlot({
-        s_range <- seq(0, 50, by = 1)
-        df <- do.call(rbind, lapply(s_range, function(s) {
-            r <- calc_all_metrics(input$wdc, input$di, input$fi, input$was, input$bd, 
-                                  input$clay, input$sand, input$silt, input$rain, s, input$strategy, input$vwc)
-            data.frame(Slope = s, Yield = r$Yield)
-        }))
-        ggplot(df, aes(x=Slope, y=Yield)) +
-            geom_area(fill="#27ae60", alpha=0.2) + geom_line(color="#27ae60", size=1.5) +
-            geom_hline(yintercept = 11, linetype="dotted", color="red") +
-            theme_minimal() + labs(title="Erosion Sensitivity to Topography")
-    })
-    
-    output$sens_table <- renderTable({
-        base_loss <- res_man()$Loss
-        test_p <- function(wdc=input$wdc, di=input$di, fi=input$fi, was=input$was, bd=input$bd, vwc=input$vwc) {
-            new <- calc_all_metrics(wdc, di, fi, was, bd, input$clay, input$sand, input$silt, input$rain, input$slope, input$strategy, vwc)
-            return(((base_loss - new$Loss) / (base_loss + 0.001)) * 100)
-        }
-        data.frame(
-            Parameter = c("Aggregate Stability (WAS)", "Dispersion (DI)", "Density (BD)", "Initial Wetness (VWC)"),
-            Action = c("Increase 10%", "Decrease 10%", "Decrease 10%", "Decrease 10%"),
-            Impact_on_Erosion = c(
-                paste0("-", round(test_p(was = input$was * 1.1), 2), "%"),
-                paste0("-", round(test_p(di = input$di * 0.9), 2), "%"),
-                paste0("-", round(test_p(bd = input$bd * 0.9), 2), "%"),
-                paste0("-", round(test_p(vwc = input$vwc * 0.9), 2), "%")
-            )
+    # Reactive Engine with strict validation
+    res <- reactive({
+        req(input$sand, input$silt, input$clay, input$wdc, input$wds, input$was, input$bd)
+        
+        calc_soil_physics(
+            as.numeric(input$sand), as.numeric(input$silt), as.numeric(input$clay), 
+            as.numeric(input$vwc), as.numeric(input$bd), as.numeric(input$wdc), 
+            as.numeric(input$wds), as.numeric(input$was), as.numeric(input$rain), 
+            as.numeric(input$slope), input$strategy
         )
     })
     
-    # Bulk Processing
-    raw_bulk <- reactive({
-        req(input$bulk_csv); df <- read.csv(input$bulk_csv$datapath)
-        colnames(df) <- toupper(gsub("[[:punct:]]| ", "", colnames(df))); return(df)
+    # KPI Outputs
+    output$sdi_val <- renderText({ 
+        val <- res()$SDI
+        if(is.null(val) || is.na(val)) return("0.0%")
+        paste0(round(val, 1), "%") 
     })
     
-    output$group_selector_ui <- renderUI({
-        req(raw_bulk()); selectInput("group_var", "Group By Variable:", choices = colnames(raw_bulk()))
+    output$yield_val <- renderText({ round(res()$Yield, 2) })
+    output$infilt_val <- renderText({ round(res()$Infilt, 1) })
+    
+    output$sdi_status <- renderText({
+        s <- res()$SDI
+        if(s < 35) "Condition: STABLE" 
+        else if(s < 70) "Condition: ERODIBLE" 
+        else "Condition: CRITICAL"
     })
     
-    processed_bulk <- reactive({
-        req(raw_bulk(), input$group_var); df <- raw_bulk()
-        res <- calc_all_metrics(df$WDC, df$DI, df$FI, df$WAS, df$BD, df$CLAY, df$SAND, df$SILT, 
-                                input$rain, input$slope, input$strategy, df$VWC)
-        cbind(df, res) %>% group_by(across(all_of(input$group_var))) %>%
-            summarise(Mean_SDI = round(mean(SDI),1), Mean_Infilt = round(mean(Infilt),1), 
-                      Mean_Loss = round(mean(Loss),2), Mean_Yield = round(mean(Yield),2))
+    # Summary Data Outputs
+    output$dr_out <- renderText({ round(res()$DR, 1) })
+    output$fi_out <- renderText({ round(res()$FI, 2) })
+    output$runoff_out <- renderText({ round(res()$Runoff, 2) })
+    output$clog_out <- renderText({ 
+        val <- res()$Clog
+        if(is.na(val)) return("0.00")
+        round(val, 2) 
     })
     
-    output$bulk_plot <- renderPlot({
-        req(processed_bulk())
-        ggplot(processed_bulk(), aes_string(x=input$group_var, y="Mean_Yield", fill="Mean_SDI")) +
-            geom_bar(stat="identity") + scale_fill_gradient(low="#3498db", high="#e74c3c") +
-            labs(title="Bulk Comparison", subtitle="Color intensity shows SDI Risk %", y="tons/ha") + 
+    # Slope Curve Plot
+    output$slope_curve <- renderPlot({
+        req(res())
+        s_range <- seq(0, 50, 1)
+        df_curve <- do.call(rbind, lapply(s_range, function(s){
+            r <- calc_soil_physics(input$sand, input$silt, input$clay, input$vwc, 
+                                   input$bd, input$wdc, input$wds, input$was, 
+                                   input$rain, s, input$strategy)
+            data.frame(Slope=s, Yield=r$Yield)
+        }))
+        
+        ggplot(df_curve, aes(x=Slope, y=Yield)) + 
+            geom_area(fill="#3498db", alpha=0.15) +
+            geom_line(color="#2980b9", size=1.1) +
+            geom_vline(xintercept = input$slope, linetype="dashed", color="#e74c3c") +
+            labs(subtitle="Red line indicates current slope setting",
+                 y="Sediment Yield (t/ha)", x="Slope Gradient (%)") +
             theme_minimal()
     })
     
-    output$bulk_table <- renderTable({ processed_bulk() })
+    # Sensitivity Table
+    output$sens_table <- renderTable({
+        req(res())
+        base_loss <- res()$Yield
+        
+        calc_reduction <- function(new_was=input$was, new_wdc=input$wdc, new_bd=input$bd) {
+            r <- calc_soil_physics(input$sand, input$silt, input$clay, input$vwc, 
+                                   new_bd, new_wdc, input$wds, new_was, 
+                                   input$rain, input$slope, input$strategy)
+            return(((base_loss - r$Yield) / (base_loss + 0.0001)) * 100)
+        }
+        
+        data.frame(
+            Property = c("Stability (WAS)", "Dispersibility (WDC)", "Compaction (BD)"),
+            Action = c("+10% Improvement", "-10% Reduction", "-10% Reduction"),
+            Soil_Loss_Red = c(
+                paste0(round(calc_reduction(new_was = input$was * 1.1), 2), "%"),
+                paste0(round(calc_reduction(new_wdc = input$wdc * 0.9), 2), "%"),
+                paste0(round(calc_reduction(new_bd = input$bd * 0.9), 2), "%")
+            )
+        )
+    }, striped = TRUE, hover = TRUE, align = 'c')
 }
 
 shinyApp(ui, server)

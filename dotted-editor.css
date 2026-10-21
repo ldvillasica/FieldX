@@ -1,0 +1,11 @@
+/* Very faint dotted background pattern for Obsidian */
+.markdown-source-view.mod-cm6 .cm-scroller,
+.markdown-reading-view .markdown-rendered {
+  background-image: radial-gradient(
+    circle,
+    rgba(128, 128, 128, 0.12) 1px, /* Low opacity (0.12) makes it barely visible */
+    transparent 1px
+  ) !important;
+  background-size: 20px 20px !important;
+  background-position: 0 0 !important;
+}
